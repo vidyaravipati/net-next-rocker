@@ -289,6 +289,12 @@ config NET_FLOW_LIMIT
 	  with many clients some protection against DoS by a single (spoofed)
 	  flow that greatly exceeds average workload.
 
+config NET_SWITCHDEV
+	boolean "Switch device support"
+	depends on INET
+	---help---
+	  This module provides support for hardware switch chips.
+
 menu "Network testing"
 
 config NET_PKTGEN

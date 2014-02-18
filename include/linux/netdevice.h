@@ -996,6 +996,12 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *	Callback to use for xmit over the accelerated station. This
  *	is used in place of ndo_start_xmit on accelerated net
  *	devices.
+ *
+ * int (*ndo_swdev_get_id)(struct net_device *dev,
+ *			   struct netdev_phys_item_id *psid);
+ *	Called to get an ID of the switch chip this port is part of.
+ *	If driver implements this, it indicates that it represents a port
+ *	of a switch chip.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1144,6 +1150,10 @@ struct net_device_ops {
 							struct net_device *dev,
 							void *priv);
 	int			(*ndo_get_lock_subclass)(struct net_device *dev);
+#ifdef CONFIG_NET_SWITCHDEV
+	int			(*ndo_swdev_get_id)(struct net_device *dev,
+						    struct netdev_phys_item_id *psid);
+#endif
 };
 
 /**
