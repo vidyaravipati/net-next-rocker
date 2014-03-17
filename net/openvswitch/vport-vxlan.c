@@ -58,7 +58,7 @@ static inline struct vxlan_port *vxlan_vport(const struct vport *vport)
 /* Called with rcu_read_lock and BH disabled. */
 static void vxlan_rcv(struct vxlan_sock *vs, struct sk_buff *skb, __be32 vx_vni)
 {
-	struct ovs_key_ipv4_tunnel tun_key;
+	struct sw_flow_key_ipv4_tunnel tun_key;
 	struct vport *vport = vs->data;
 	struct iphdr *iph;
 	__be64 key;

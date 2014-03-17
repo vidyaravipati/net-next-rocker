@@ -100,9 +100,9 @@ struct datapath {
  * packet is not being tunneled.
  */
 struct ovs_skb_cb {
-	struct sw_flow		*flow;
+	struct ovs_flow		*flow;
 	struct sw_flow_key	*pkt_key;
-	struct ovs_key_ipv4_tunnel  *tun_key;
+	struct sw_flow_key_ipv4_tunnel  *tun_key;
 };
 #define OVS_CB(skb) ((struct ovs_skb_cb *)(skb)->cb)
 

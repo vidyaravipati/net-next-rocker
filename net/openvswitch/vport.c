@@ -337,7 +337,7 @@ int ovs_vport_get_options(const struct vport *vport, struct sk_buff *skb)
  * skb->data should point to the Ethernet header.
  */
 void ovs_vport_receive(struct vport *vport, struct sk_buff *skb,
-		       struct ovs_key_ipv4_tunnel *tun_key)
+		       struct sw_flow_key_ipv4_tunnel *tun_key)
 {
 	struct pcpu_sw_netstats *stats;
 

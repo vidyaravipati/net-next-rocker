@@ -574,7 +574,7 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 /* Execute a list of actions against 'skb'. */
 int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 {
-	struct sw_flow_actions *acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
+	struct ovs_flow_actions *acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
 
 	OVS_CB(skb)->tun_key = NULL;
 	return do_execute_actions(dp, skb, acts->actions,

@@ -48,7 +48,7 @@
 
 #include "flow_netlink.h"
 
-static void update_range__(struct sw_flow_match *match,
+static void update_range__(struct ovs_flow_match *match,
 			   size_t offset, size_t size, bool is_mask)
 {
 	struct sw_flow_key_range *range = NULL;
@@ -105,7 +105,7 @@ static u16 range_n_bytes(const struct sw_flow_key_range *range)
 	return range->end - range->start;
 }
 
-static bool match_validate(const struct sw_flow_match *match,
+static bool match_validate(const struct ovs_flow_match *match,
 			   u64 key_attrs, u64 mask_attrs)
 {
 	u64 key_expected = 1 << OVS_KEY_ATTR_ETHERNET;
@@ -327,7 +327,7 @@ static int parse_flow_nlattrs(const struct nlattr *attr,
 }
 
 static int ipv4_tun_from_nlattr(const struct nlattr *attr,
-				struct sw_flow_match *match, bool is_mask)
+				struct ovs_flow_match *match, bool is_mask)
 {
 	struct nlattr *a;
 	int rem;
@@ -416,8 +416,8 @@ static int ipv4_tun_from_nlattr(const struct nlattr *attr,
 }
 
 static int ipv4_tun_to_nlattr(struct sk_buff *skb,
-			      const struct ovs_key_ipv4_tunnel *tun_key,
-			      const struct ovs_key_ipv4_tunnel *output)
+			      const struct sw_flow_key_ipv4_tunnel *tun_key,
+			      const struct sw_flow_key_ipv4_tunnel *output)
 {
 	struct nlattr *nla;
 
@@ -451,7 +451,7 @@ static int ipv4_tun_to_nlattr(struct sk_buff *skb,
 }
 
 
-static int metadata_from_nlattrs(struct sw_flow_match *match,  u64 *attrs,
+static int metadata_from_nlattrs(struct ovs_flow_match *match,  u64 *attrs,
 				 const struct nlattr **a, bool is_mask)
 {
 	if (*attrs & (1 << OVS_KEY_ATTR_PRIORITY)) {
@@ -489,7 +489,7 @@ static int metadata_from_nlattrs(struct sw_flow_match *match,  u64 *attrs,
 	return 0;
 }
 
-static int ovs_key_from_nlattrs(struct sw_flow_match *match, u64 attrs,
+static int ovs_key_from_nlattrs(struct ovs_flow_match *match, u64 attrs,
 				const struct nlattr **a, bool is_mask)
 {
 	int err;
@@ -730,7 +730,7 @@ static void sw_flow_mask_set(struct sw_flow_mask *mask,
  * @mask: Optional. Netlink attribute holding nested %OVS_KEY_ATTR_* Netlink
  * attribute specifies the mask field of the wildcarded flow.
  */
-int ovs_nla_get_match(struct sw_flow_match *match,
+int ovs_nla_get_match(struct ovs_flow_match *match,
 		      const struct nlattr *key,
 		      const struct nlattr *mask)
 {
@@ -849,11 +849,11 @@ int ovs_nla_get_match(struct sw_flow_match *match,
 int ovs_nla_get_flow_metadata(struct sw_flow *flow,
 			      const struct nlattr *attr)
 {
-	struct ovs_key_ipv4_tunnel *tun_key = &flow->key.tun_key;
+	struct sw_flow_key_ipv4_tunnel *tun_key = &flow->key.tun_key;
 	const struct nlattr *a[OVS_KEY_ATTR_MAX + 1];
 	u64 attrs = 0;
 	int err;
-	struct sw_flow_match match;
+	struct ovs_flow_match match;
 
 	flow->key.phy.in_port = DP_MAX_PORTS;
 	flow->key.phy.priority = 0;
@@ -1070,9 +1070,9 @@ nla_put_failure:
 
 #define MAX_ACTIONS_BUFSIZE	(32 * 1024)
 
-struct sw_flow_actions *ovs_nla_alloc_flow_actions(int size)
+struct ovs_flow_actions *ovs_nla_alloc_flow_actions(int size)
 {
-	struct sw_flow_actions *sfa;
+	struct ovs_flow_actions *sfa;
 
 	if (size > MAX_ACTIONS_BUFSIZE)
 		return ERR_PTR(-EINVAL);
@@ -1087,19 +1087,19 @@ struct sw_flow_actions *ovs_nla_alloc_flow_actions(int size)
 
 /* Schedules 'sf_acts' to be freed after the next RCU grace period.
  * The caller must hold rcu_read_lock for this to be sensible. */
-void ovs_nla_free_flow_actions(struct sw_flow_actions *sf_acts)
+void ovs_nla_free_flow_actions(struct ovs_flow_actions *sf_acts)
 {
 	kfree_rcu(sf_acts, rcu);
 }
 
-static struct nlattr *reserve_sfa_size(struct sw_flow_actions **sfa,
+static struct nlattr *reserve_sfa_size(struct ovs_flow_actions **sfa,
 				       int attr_len)
 {
 
-	struct sw_flow_actions *acts;
+	struct ovs_flow_actions *acts;
 	int new_acts_size;
 	int req_size = NLA_ALIGN(attr_len);
-	int next_offset = offsetof(struct sw_flow_actions, actions) +
+	int next_offset = offsetof(struct ovs_flow_actions, actions) +
 					(*sfa)->actions_len;
 
 	if (req_size <= (ksize(*sfa) - next_offset))
@@ -1127,7 +1127,7 @@ out:
 	return  (struct nlattr *) ((unsigned char *)(*sfa) + next_offset);
 }
 
-static int add_action(struct sw_flow_actions **sfa, int attrtype, void *data, int len)
+static int add_action(struct ovs_flow_actions **sfa, int attrtype, void *data, int len)
 {
 	struct nlattr *a;
 
@@ -1145,7 +1145,7 @@ static int add_action(struct sw_flow_actions **sfa, int attrtype, void *data, in
 	return 0;
 }
 
-static inline int add_nested_action_start(struct sw_flow_actions **sfa,
+static inline int add_nested_action_start(struct ovs_flow_actions **sfa,
 					  int attrtype)
 {
 	int used = (*sfa)->actions_len;
@@ -1158,7 +1158,7 @@ static inline int add_nested_action_start(struct sw_flow_actions **sfa,
 	return used;
 }
 
-static inline void add_nested_action_end(struct sw_flow_actions *sfa,
+static inline void add_nested_action_end(struct ovs_flow_actions *sfa,
 					 int st_offset)
 {
 	struct nlattr *a = (struct nlattr *) ((unsigned char *)sfa->actions +
@@ -1169,7 +1169,7 @@ static inline void add_nested_action_end(struct sw_flow_actions *sfa,
 
 static int validate_and_copy_sample(const struct nlattr *attr,
 				    const struct sw_flow_key *key, int depth,
-				    struct sw_flow_actions **sfa)
+				    struct ovs_flow_actions **sfa)
 {
 	const struct nlattr *attrs[OVS_SAMPLE_ATTR_MAX + 1];
 	const struct nlattr *probability, *actions;
@@ -1226,7 +1226,7 @@ static int validate_tp_port(const struct sw_flow_key *flow_key)
 	return -EINVAL;
 }
 
-void ovs_match_init(struct sw_flow_match *match,
+void ovs_match_init(struct ovs_flow_match *match,
 		    struct sw_flow_key *key,
 		    struct sw_flow_mask *mask)
 {
@@ -1243,9 +1243,9 @@ void ovs_match_init(struct sw_flow_match *match,
 }
 
 static int validate_and_copy_set_tun(const struct nlattr *attr,
-				     struct sw_flow_actions **sfa)
+				     struct ovs_flow_actions **sfa)
 {
-	struct sw_flow_match match;
+	struct ovs_flow_match match;
 	struct sw_flow_key key;
 	int err, start;
 
@@ -1267,7 +1267,7 @@ static int validate_and_copy_set_tun(const struct nlattr *attr,
 
 static int validate_set(const struct nlattr *a,
 			const struct sw_flow_key *flow_key,
-			struct sw_flow_actions **sfa,
+			struct ovs_flow_actions **sfa,
 			bool *set_tun)
 {
 	const struct nlattr *ovs_key = nla_data(a);
@@ -1381,7 +1381,7 @@ static int validate_userspace(const struct nlattr *attr)
 }
 
 static int copy_action(const struct nlattr *from,
-		       struct sw_flow_actions **sfa)
+		       struct ovs_flow_actions **sfa)
 {
 	int totlen = NLA_ALIGN(from->nla_len);
 	struct nlattr *to;
@@ -1397,7 +1397,7 @@ static int copy_action(const struct nlattr *from,
 int ovs_nla_copy_actions(const struct nlattr *attr,
 			 const struct sw_flow_key *key,
 			 int depth,
-			 struct sw_flow_actions **sfa)
+			 struct ovs_flow_actions **sfa)
 {
 	const struct nlattr *a;
 	int rem, err;
