@@ -71,6 +71,13 @@ config DUMMY
 	  To compile this driver as a module, choose M here: the module
 	  will be called dummy.
 
+config NET_DUMMY_SWITCH
+	tristate "Dummy switch net driver support"
+	depends on NET_SWITCHDEV
+	---help---
+	  To compile this driver as a module, choose M here: the module
+	  will be called dummyswitch.
+
 config EQUALIZER
 	tristate "EQL (serial line load balancing) support"
 	---help---
