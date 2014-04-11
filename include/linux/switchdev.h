@@ -16,11 +16,25 @@
 #ifdef CONFIG_NET_SWITCHDEV
 
 int swdev_get_id(struct net_device *dev, struct netdev_phys_item_id *psid);
+int swdev_flow_insert(struct net_device *dev, const struct sw_flow *flow);
+int swdev_flow_remove(struct net_device *dev, const struct sw_flow *flow);
 
 #else
 
 static inline int swdev_get_id(struct net_device *dev,
 			       struct netdev_phys_item_id *psid)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int swdev_flow_insert(struct net_device *dev,
+				    const struct sw_flow *flow)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int swdev_flow_remove(struct net_device *dev,
+				    const struct sw_flow *flow)
 {
 	return -EOPNOTSUPP;
 }

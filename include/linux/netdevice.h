@@ -49,6 +49,8 @@
 
 #include <linux/netdev_features.h>
 #include <linux/neighbour.h>
+#include <linux/sw_flow.h>
+
 #include <uapi/linux/netdevice.h>
 
 struct netpoll_info;
@@ -1002,6 +1004,18 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *	Called to get an ID of the switch chip this port is part of.
  *	If driver implements this, it indicates that it represents a port
  *	of a switch chip.
+ *
+ * int (*ndo_swdev_flow_insert)(struct net_device *dev,
+ *				const struct sw_flow *flow);
+ *	Called to insert a flow into switch device. If driver does
+ *	not implement this, it is assumed that the hw does not have
+ *	a capability to work with flows.
+ *
+ * int (*ndo_swdev_flow_remove)(struct net_device *dev,
+ *				const struct sw_flow *flow);
+ *	Called to remove a flow from switch device. If driver does
+ *	not implement this, it is assumed that the hw does not have
+ *	a capability to work with flows.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1153,6 +1167,10 @@ struct net_device_ops {
 #ifdef CONFIG_NET_SWITCHDEV
 	int			(*ndo_swdev_get_id)(struct net_device *dev,
 						    struct netdev_phys_item_id *psid);
+	int			(*ndo_swdev_flow_insert)(struct net_device *dev,
+							 const struct sw_flow *flow);
+	int			(*ndo_swdev_flow_remove)(struct net_device *dev,
+							 const struct sw_flow *flow);
 #endif
 };
 

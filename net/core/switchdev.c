@@ -30,3 +30,41 @@ int swdev_get_id(struct net_device *dev, struct netdev_phys_item_id *psid)
 	return ops->ndo_swdev_get_id(dev, psid);
 }
 EXPORT_SYMBOL(swdev_get_id);
+
+/**
+ *	swdev_flow_insert - Insert a flow into switch
+ *	@dev: port device
+ *	@flow: flow descriptor
+ *
+ *	Insert a flow into switch this port is part of.
+ */
+int swdev_flow_insert(struct net_device *dev, const struct sw_flow *flow)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	if (!ops->ndo_swdev_flow_insert)
+		return -EOPNOTSUPP;
+	WARN_ON(!ops->ndo_swdev_get_id);
+	BUG_ON(!flow->actions);
+	return ops->ndo_swdev_flow_insert(dev, flow);
+}
+EXPORT_SYMBOL(swdev_flow_insert);
+
+/**
+ *	swdev_flow_remove - Remove a flow from switch
+ *	@dev: port device
+ *	@flow: flow descriptor
+ *
+ *	Remove a flow from switch this port is part of.
+ */
+int swdev_flow_remove(struct net_device *dev, const struct sw_flow *flow)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	if (!ops->ndo_swdev_flow_remove)
+		return -EOPNOTSUPP;
+	WARN_ON(!ops->ndo_swdev_get_id);
+	BUG_ON(!flow->actions);
+	return ops->ndo_swdev_flow_remove(dev, flow);
+}
+EXPORT_SYMBOL(swdev_flow_remove);
