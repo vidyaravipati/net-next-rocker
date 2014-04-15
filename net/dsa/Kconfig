@@ -1,6 +1,6 @@
 config HAVE_NET_DSA
 	def_bool y
-	depends on NETDEVICES && !S390
+	depends on NETDEVICES && NET_SWITCHDEV && !S390
 
 # Drivers must select NET_DSA and the appropriate tagging format
 

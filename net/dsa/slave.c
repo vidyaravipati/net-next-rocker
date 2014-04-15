@@ -171,6 +171,19 @@ static int dsa_slave_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	return -EOPNOTSUPP;
 }
 
+static int dsa_slave_swdev_get_id(struct net_device *dev,
+				  struct netdev_phys_item_id *psid)
+{
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	struct dsa_switch *ds = p->parent;
+	u64 tmp = (u64) ds;
+
+	/* TODO: add more sophisticated id generation */
+	memcpy(&psid->id, &tmp, sizeof(tmp));
+	psid->id_len = sizeof(tmp);
+
+	return 0;
+}
 
 /* ethtool operations *******************************************************/
 static int
@@ -303,6 +316,7 @@ static const struct net_device_ops dsa_netdev_ops = {
 	.ndo_set_rx_mode	= dsa_slave_set_rx_mode,
 	.ndo_set_mac_address	= dsa_slave_set_mac_address,
 	.ndo_do_ioctl		= dsa_slave_ioctl,
+	.ndo_swdev_get_id	= dsa_slave_swdev_get_id,
 };
 #endif
 #ifdef CONFIG_NET_DSA_TAG_EDSA
@@ -315,6 +329,7 @@ static const struct net_device_ops edsa_netdev_ops = {
 	.ndo_set_rx_mode	= dsa_slave_set_rx_mode,
 	.ndo_set_mac_address	= dsa_slave_set_mac_address,
 	.ndo_do_ioctl		= dsa_slave_ioctl,
+	.ndo_swdev_get_id	= dsa_slave_swdev_get_id,
 };
 #endif
 #ifdef CONFIG_NET_DSA_TAG_TRAILER
@@ -327,6 +342,7 @@ static const struct net_device_ops trailer_netdev_ops = {
 	.ndo_set_rx_mode	= dsa_slave_set_rx_mode,
 	.ndo_set_mac_address	= dsa_slave_set_mac_address,
 	.ndo_do_ioctl		= dsa_slave_ioctl,
+	.ndo_swdev_get_id	= dsa_slave_swdev_get_id,
 };
 #endif
 
