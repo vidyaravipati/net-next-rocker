@@ -59,6 +59,7 @@
 #include "flow_netlink.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
+#include "hw_offload.h"
 
 int ovs_net_id __read_mostly;
 
@@ -864,6 +865,9 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 			acts = NULL;
 			goto err_unlock_ovs;
 		}
+		error = ovs_hw_flow_insert(dp, new_flow);
+		if (error)
+			pr_warn("failed to insert flow into hw\n");
 
 		if (unlikely(reply)) {
 			error = ovs_flow_cmd_fill_info(new_flow,
@@ -893,9 +897,17 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 			error = -EEXIST;
 			goto err_unlock_ovs;
 		}
+		error = ovs_hw_flow_remove(dp, flow);
+		if (error)
+			pr_warn("failed to remove flow from hw\n");
+
 		/* Update actions. */
 		old_acts = ovsl_dereference(flow->sf_acts);
 		rcu_assign_pointer(flow->sf_acts, acts);
+
+		error = ovs_hw_flow_insert(dp, flow);
+		if (error)
+			pr_warn("failed to insert flow into hw\n");
 
 		if (unlikely(reply)) {
 			error = ovs_flow_cmd_fill_info(flow,
@@ -994,8 +1006,16 @@ static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 	}
 	/* Update actions, if present. */
 	if (likely(acts)) {
+		error = ovs_hw_flow_remove(dp, flow);
+		if (error)
+			pr_warn("failed to remove flow from hw\n");
+
 		old_acts = ovsl_dereference(flow->sf_acts);
 		rcu_assign_pointer(flow->sf_acts, acts);
+
+		error = ovs_hw_flow_insert(dp, flow);
+		if (error)
+			pr_warn("failed to insert flow into hw\n");
 
 		if (unlikely(reply)) {
 			error = ovs_flow_cmd_fill_info(flow,
@@ -1121,6 +1141,9 @@ static int ovs_flow_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	ovs_flow_tbl_remove(&dp->table, flow);
+	err = ovs_hw_flow_remove(dp, flow);
+	if (err)
+		pr_warn("failed to remove flow from hw\n");
 	ovs_unlock();
 
 	reply = ovs_flow_cmd_alloc_info((const struct ovs_flow_actions __force *) flow->sf_acts,

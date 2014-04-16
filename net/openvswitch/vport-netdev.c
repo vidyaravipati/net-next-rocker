@@ -32,6 +32,7 @@
 #include "datapath.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
+#include "hw_offload.h"
 
 struct netdev_vport {
 	struct rcu_head rcu;
@@ -135,6 +136,7 @@ static struct vport *netdev_create(const struct vport_parms *parms)
 
 	dev_set_promiscuity(netdev_vport->dev, 1);
 	netdev_vport->dev->priv_flags |= IFF_OVS_DATAPATH;
+	ovs_hw_port_add(vport->dp, vport);
 	rtnl_unlock();
 
 	return vport;
@@ -165,6 +167,7 @@ void ovs_netdev_detach_dev(struct vport *vport)
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
 	ASSERT_RTNL();
+	ovs_hw_port_del(vport->dp, vport);
 	netdev_vport->dev->priv_flags &= ~IFF_OVS_DATAPATH;
 	netdev_rx_handler_unregister(netdev_vport->dev);
 	netdev_upper_dev_unlink(netdev_vport->dev,

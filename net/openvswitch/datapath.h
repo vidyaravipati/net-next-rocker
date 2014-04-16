@@ -90,6 +90,9 @@ struct datapath {
 #endif
 
 	u32 user_features;
+
+	/* List of switchdev representative ports */
+	struct list_head swdev_rep_list;
 };
 
 /**

@@ -91,6 +91,8 @@ struct vport {
 
 	spinlock_t stats_lock;
 	struct vport_err_stats err_stats;
+
+	struct list_head swdev_rep_list;
 };
 
 /**

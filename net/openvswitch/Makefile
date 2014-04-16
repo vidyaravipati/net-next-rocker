@@ -13,7 +13,8 @@ openvswitch-y := \
 	flow_table.o \
 	vport.o \
 	vport-internal_dev.o \
-	vport-netdev.o
+	vport-netdev.o \
+	hw_offload.o
 
 ifneq ($(CONFIG_OPENVSWITCH_VXLAN),)
 openvswitch-y += vport-vxlan.o

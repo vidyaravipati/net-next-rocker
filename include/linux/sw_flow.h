@@ -89,7 +89,21 @@ struct sw_flow_mask {
 	struct sw_flow_key key;
 };
 
+enum sw_flow_action_type {
+	SW_FLOW_ACTION_TYPE_OUTPUT,
+	SW_FLOW_ACTION_TYPE_VLAN_PUSH,
+	SW_FLOW_ACTION_TYPE_VLAN_POP,
+};
+
 struct sw_flow_action {
+	enum sw_flow_action_type type;
+	union {
+		struct net_device *output_dev;
+		struct {
+			__be16 vlan_proto;
+			u16 vlan_tci;
+		} vlan;
+	};
 };
 
 struct sw_flow_actions {
