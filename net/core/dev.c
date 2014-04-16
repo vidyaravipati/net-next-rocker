@@ -4615,30 +4615,32 @@ struct net_device *netdev_upper_get_next_dev_rcu(struct net_device *dev,
 EXPORT_SYMBOL(netdev_upper_get_next_dev_rcu);
 
 /**
- * netdev_all_upper_get_next_dev_rcu - Get the next dev from upper list
+ * netdev_all_adj_get_next_dev_rcu - Get the next dev from adjacent list
  * @dev: device
  * @iter: list_head ** of the current position
+ * @adj_list: adjacent list to go through
  *
- * Gets the next device from the dev's upper list, starting from iter
+ * Gets the next device from the dev's adjacent list, starting from iter
  * position. The caller must hold RCU read lock.
  */
-struct net_device *netdev_all_upper_get_next_dev_rcu(struct net_device *dev,
-						     struct list_head **iter)
+struct net_device *netdev_all_adj_get_next_dev_rcu(struct net_device *dev,
+						   struct list_head **iter,
+						   struct list_head *adj_list)
 {
-	struct netdev_adjacent *upper;
+	struct netdev_adjacent *adj;
 
 	WARN_ON_ONCE(!rcu_read_lock_held() && !lockdep_rtnl_is_held());
 
-	upper = list_entry_rcu((*iter)->next, struct netdev_adjacent, list);
-
-	if (&upper->list == &dev->all_adj_list.upper)
+	if (!*iter)
+		*iter = adj_list;
+	if ((*iter)->next == adj_list)
 		return NULL;
 
-	*iter = &upper->list;
-
-	return upper->dev;
+	adj = list_entry_rcu((*iter)->next, struct netdev_adjacent, list);
+	*iter = &adj->list;
+	return adj->dev;
 }
-EXPORT_SYMBOL(netdev_all_upper_get_next_dev_rcu);
+EXPORT_SYMBOL(netdev_all_adj_get_next_dev_rcu);
 
 /**
  * netdev_lower_get_next_private - Get the next ->private from the

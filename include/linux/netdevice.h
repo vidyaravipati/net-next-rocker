@@ -3161,6 +3161,9 @@ struct net_device *netdev_upper_get_next_dev_rcu(struct net_device *dev,
 						     struct list_head **iter);
 struct net_device *netdev_all_upper_get_next_dev_rcu(struct net_device *dev,
 						     struct list_head **iter);
+struct net_device *netdev_all_adj_get_next_dev_rcu(struct net_device *dev,
+						   struct list_head **iter,
+						   struct list_head *adj_list);
 
 /* iterate through upper list, must be called under RCU read lock */
 #define netdev_for_each_upper_dev_rcu(dev, updev, iter) \
@@ -3171,10 +3174,17 @@ struct net_device *netdev_all_upper_get_next_dev_rcu(struct net_device *dev,
 
 /* iterate through upper list, must be called under RCU read lock */
 #define netdev_for_each_all_upper_dev_rcu(dev, updev, iter) \
-	for (iter = &(dev)->all_adj_list.upper, \
-	     updev = netdev_all_upper_get_next_dev_rcu(dev, &(iter)); \
+	for (iter = NULL, \
+	     updev = netdev_all_adj_get_next_dev_rcu(dev, &(iter), &(dev)->all_adj_list.upper); \
 	     updev; \
-	     updev = netdev_all_upper_get_next_dev_rcu(dev, &(iter)))
+	     updev = netdev_all_adj_get_next_dev_rcu(dev, &(iter), &(dev)->all_adj_list.upper))
+
+/* iterate through lower list, must be called under RCU read lock */
+#define netdev_for_each_all_lower_dev_rcu(dev, lodev, iter) \
+	for (iter = NULL, \
+	     lodev = netdev_all_adj_get_next_dev_rcu(dev, &(iter), &(dev)->all_adj_list.lower); \
+	     lodev; \
+	     lodev = netdev_all_adj_get_next_dev_rcu(dev, &(iter), &(dev)->all_adj_list.lower))
 
 void *netdev_lower_get_next_private(struct net_device *dev,
 				    struct list_head **iter);
