@@ -173,7 +173,7 @@ static int get_dpifindex(struct datapath *dp)
 
 	local = ovs_vport_rcu(dp, OVSP_LOCAL);
 	if (local)
-		ifindex = netdev_vport_priv(local)->dev->ifindex;
+		ifindex = local->ops->get_netdev(local)->ifindex;
 	else
 		ifindex = 0;
 

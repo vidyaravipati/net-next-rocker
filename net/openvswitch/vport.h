@@ -145,6 +145,8 @@ struct vport_ops {
 	const char *(*get_name)(const struct vport *);
 
 	int (*send)(struct vport *, struct sk_buff *);
+
+	struct net_device *(*get_netdev)(struct vport *);
 };
 
 enum vport_err_type {

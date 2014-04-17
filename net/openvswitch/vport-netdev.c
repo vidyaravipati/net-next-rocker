@@ -33,6 +33,16 @@
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
 
+struct netdev_vport {
+	struct rcu_head rcu;
+	struct net_device *dev;
+};
+
+static struct netdev_vport *netdev_vport_priv(const struct vport *vport)
+{
+	return vport_priv(vport);
+}
+
 /* Must be called with rcu_read_lock. */
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 {
@@ -224,10 +234,16 @@ struct vport *ovs_netdev_get_vport(struct net_device *dev)
 		return NULL;
 }
 
+static struct net_device *netdev_get_netdev(struct vport *vport)
+{
+	return netdev_vport_priv(vport)->dev;
+}
+
 const struct vport_ops ovs_netdev_vport_ops = {
 	.type		= OVS_VPORT_TYPE_NETDEV,
 	.create		= netdev_create,
 	.destroy	= netdev_destroy,
 	.get_name	= ovs_netdev_get_name,
 	.send		= netdev_send,
+	.get_netdev	= netdev_get_netdev,
 };
