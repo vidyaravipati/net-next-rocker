@@ -358,4 +358,12 @@ config VMXNET3
 
 source "drivers/net/hyperv/Kconfig"
 
+config ROCKER
+	tristate "Rocker switch driver"
+	depends on PCI && INET
+	help
+	  This driver supports Rocker switch device.
+	  To compile this driver as a module, choose M here: the
+	  module will be called rocker.
+
 endif # NETDEVICES
