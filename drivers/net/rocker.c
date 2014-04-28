@@ -72,6 +72,107 @@ static int rocker_reg_test(struct rocker *rocker)
 	return 0;
 }
 
+static int rocker_dma_test_one(struct rocker *rocker, u32 test_type,
+			       dma_addr_t dma_handle, unsigned char *buf,
+			       unsigned char *expect, size_t size)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int i;
+
+	rocker_write32(rocker, TEST_DMA_CTRL, test_type);
+
+	wait_event_timeout(rocker->wait, rocker->status, HZ / 10);
+	if (!rocker->status) {
+		dev_err(&pdev->dev, "no interrupt received within a timeout\n");
+		return -EIO;
+	}
+
+	for (i = 0; i < size; i++) {
+		if (buf[i] != expect[i]) {
+			dev_err(&pdev->dev, "unexpected memory content %02x at byte %x\n, %02x expected",
+				buf[i], i, expect[i]);
+			return -EIO;
+		}
+	}
+	return 0;
+}
+
+#define ROCKER_TEST_DMA_BUF_SIZE (PAGE_SIZE * 4)
+#define ROCKER_TEST_DMA_FILL_PATTERN 0x96
+
+static int rocker_dma_test_offset(struct rocker *rocker, int offset)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	unsigned char *alloc;
+	unsigned char *buf;
+	unsigned char *expect;
+	dma_addr_t dma_handle;
+	int i;
+	int err;
+
+	alloc = kzalloc(ROCKER_TEST_DMA_BUF_SIZE * 2 + offset, GFP_KERNEL);
+	if (!alloc)
+		return -ENOMEM;
+	buf = alloc + offset;
+	expect = buf + ROCKER_TEST_DMA_BUF_SIZE;
+
+	dma_handle = pci_map_single(pdev, buf, ROCKER_TEST_DMA_BUF_SIZE,
+				    PCI_DMA_BIDIRECTIONAL);
+	if (pci_dma_mapping_error(pdev, dma_handle)) {
+		err = -EIO;
+		goto free_alloc;
+	}
+
+	rocker_write64(rocker, TEST_DMA_ADDR, dma_handle);
+	rocker_write32(rocker, TEST_DMA_SIZE, ROCKER_TEST_DMA_BUF_SIZE);
+	rocker_write32(rocker, IRQ_MASK, ROCKER_IRQ_TEST_DMA_DONE);
+
+	memset(expect, ROCKER_TEST_DMA_FILL_PATTERN, ROCKER_TEST_DMA_BUF_SIZE);
+	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_FILL,
+				  dma_handle, buf, expect,
+				  ROCKER_TEST_DMA_BUF_SIZE);
+	if (err)
+		goto unmap;
+
+	memset(expect, 0, ROCKER_TEST_DMA_BUF_SIZE);
+	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_CLEAR,
+				  dma_handle, buf, expect,
+				  ROCKER_TEST_DMA_BUF_SIZE);
+	if (err)
+		goto unmap;
+
+	prandom_bytes(buf, ROCKER_TEST_DMA_BUF_SIZE);
+	for (i = 0; i < ROCKER_TEST_DMA_BUF_SIZE; i++)
+		expect[i] = ~buf[i];
+	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_INVERT,
+				  dma_handle, buf, expect,
+				  ROCKER_TEST_DMA_BUF_SIZE);
+	if (err)
+		goto unmap;
+
+
+unmap:
+	pci_unmap_single(pdev, dma_handle, ROCKER_TEST_DMA_BUF_SIZE,
+			 PCI_DMA_BIDIRECTIONAL);
+free_alloc:
+	kfree(alloc);
+
+	return err;
+}
+
+static int rocker_dma_test(struct rocker *rocker)
+{
+	int i;
+	int err;
+
+	for (i = 0; i < 8; i++) {
+		err = rocker_dma_test_offset(rocker, i);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
 static irqreturn_t rocker_intr_test_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
@@ -124,7 +225,10 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 		err = -EIO;
 		goto free_irq;
 	}
-	err = 0;
+
+	err = rocker_dma_test(rocker);
+	if (err)
+		dev_err(&pdev->dev, "dma test failed\n");
 
 free_irq:
 	free_irq(pdev->irq, rocker);
