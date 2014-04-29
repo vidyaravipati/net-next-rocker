@@ -15,6 +15,8 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/random.h>
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
 
 #include "rocker.h"
@@ -26,11 +28,21 @@ static DEFINE_PCI_DEVICE_TABLE(rocker_pci_id_table) = {
 	{0}
 };
 
+struct rocker;
+
+struct rocker_port {
+	struct net_device *dev;
+	struct rocker *rocker;
+	unsigned port_number;
+};
+
 struct rocker {
 	struct pci_dev *pdev;
 	u8 __iomem *hw_addr;
 	wait_queue_head_t wait;
 	u32 status;
+	unsigned port_count;
+	struct rocker_port **ports;
 };
 
 #define rocker_write32(rocker, reg, val)	\
@@ -246,6 +258,78 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+	dev_kfree_skb(skb);
+	return NETDEV_TX_OK;
+}
+
+static const struct net_device_ops rocker_port_netdev_ops = {
+	.ndo_start_xmit		= rocker_port_xmit,
+};
+
+static void rocker_remove_ports(struct rocker *rocker)
+{
+	int i;
+
+	for (i = 0; i < rocker->port_count; i++)
+		unregister_netdev(rocker->ports[i]->dev);
+	kfree(rocker->ports);
+}
+
+static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	struct rocker_port *rocker_port;
+	struct net_device *dev;
+	int err;
+
+	dev = alloc_etherdev(sizeof(struct rocker_port));
+	if (!dev)
+		return -ENOMEM;
+	rocker_port = netdev_priv(dev);
+	rocker_port->dev = dev;
+	rocker_port->rocker = rocker;
+	rocker_port->port_number = port_number;
+
+	eth_hw_addr_random(dev);
+	dev->netdev_ops = &rocker_port_netdev_ops;
+	netif_carrier_off(dev);
+
+	err = register_netdev(dev);
+	if (err) {
+		dev_err(&pdev->dev, "register_netdev failed\n");
+		goto free_netdev;
+	}
+	rocker->ports[port_number] = rocker_port;
+	return 0;
+
+free_netdev:
+	free_netdev(dev);
+	return err;
+}
+
+static int rocker_probe_ports(struct rocker *rocker)
+{
+	int i;
+	size_t alloc_size;
+	int err;
+
+	rocker->port_count = rocker_read32(rocker, PORT_PHYS_COUNT);
+	alloc_size = sizeof(struct rocker_port *) * rocker->port_count;
+	rocker->ports = kmalloc(alloc_size, GFP_KERNEL);
+	for (i = 0; i < rocker->port_count; i++) {
+		err = rocker_probe_port(rocker, i);
+		if (err)
+			goto remove_ports;
+	}
+	return 0;
+
+remove_ports:
+	rocker_remove_ports(rocker);
+	return err;
+}
+
 static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct rocker *rocker;
@@ -312,8 +396,16 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 					 ROCKER_IRQ_CMD_DMA_DONE |
 					 ROCKER_IRQ_EVENT_DMA_DONE);
 
+	err = rocker_probe_ports(rocker);
+	if (err) {
+		dev_err(&pdev->dev, "failed to probe ports\n");
+		goto err_probe_ports;
+	}
+
 	return 0;
 
+err_probe_ports:
+	free_irq(pdev->irq, rocker);
 err_request_irq:
 err_basic_hw_test:
 	iounmap(rocker->hw_addr);
@@ -331,6 +423,7 @@ static void rocker_remove(struct pci_dev *pdev)
 {
 	struct rocker *rocker = pci_get_drvdata(pdev);
 
+	rocker_remove_ports(rocker);
 	free_irq(rocker->pdev->irq, rocker);
 	iounmap(rocker->hw_addr);
 	pci_release_regions(rocker->pdev);
