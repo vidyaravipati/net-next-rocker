@@ -47,4 +47,12 @@
 #define ROCKER_IRQ_EVENT_DMA_DONE	(1 << 4)
 #define ROCKER_IRQ_TEST_DMA_DONE	(1 << 5)
 
+/*
+ * Rocker general purpose registers
+ */
+#define ROCKER_ENDIANESS_SEL		0x0300
+#define ROCKER_PORT_PHYS_COUNT		0x0304
+#define ROCKER_PORT_PHYS_MODE		0x0308 /* 8-byte */
+#define ROCKER_PORT_PHYS_LINK_STATUS	0x0310 /* 8-byte */
+
 #endif
