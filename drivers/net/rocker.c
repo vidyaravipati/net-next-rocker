@@ -249,6 +249,37 @@ free_irq:
 	return err;
 }
 
+static void rocker_port_link_up(struct rocker_port *rocker_port)
+{
+	netif_carrier_on(rocker_port->dev);
+	netdev_info(rocker_port->dev, "Link is up\n");
+}
+
+static void rocker_port_link_down(struct rocker_port *rocker_port)
+{
+	netif_carrier_off(rocker_port->dev);
+	netdev_info(rocker_port->dev, "Link is down\n");
+}
+
+static void rocker_link_changed(struct rocker *rocker)
+{
+	u64 link_status = rocker_read64(rocker, PORT_PHYS_LINK_STATUS);
+	struct rocker_port *rocker_port;
+	bool link_up;
+	int i;
+
+	for (i = 0; i < rocker->port_count; i++) {
+		rocker_port = rocker->ports[i];
+		link_up = link_status & (1 << (rocker_port->port_number + 1));
+		if (netif_carrier_ok(rocker_port->dev) != link_up) {
+			if (link_up)
+				rocker_port_link_up(rocker_port);
+			else
+				rocker_port_link_down(rocker_port);
+		}
+	}
+}
+
 static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
@@ -256,6 +287,9 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 
 	if (status == 0)
 		return IRQ_NONE;
+
+	if (status & ROCKER_IRQ_LINK)
+		rocker_link_changed(rocker);
 
 	return IRQ_HANDLED;
 }
@@ -416,6 +450,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_err(&pdev->dev, "failed to probe ports\n");
 		goto err_probe_ports;
 	}
+
+	rocker_link_changed(rocker);
 
 	return 0;
 
