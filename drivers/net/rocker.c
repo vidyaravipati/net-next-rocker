@@ -17,7 +17,9 @@
 #include <linux/random.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/ethtool.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
+#include <generated/utsrelease.h>
 
 #include "rocker.h"
 
@@ -268,6 +270,18 @@ static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_start_xmit		= rocker_port_xmit,
 };
 
+static void rocker_port_get_drvinfo(struct net_device *dev,
+				    struct ethtool_drvinfo *drvinfo)
+{
+	strlcpy(drvinfo->driver, rocker_driver_name, sizeof(drvinfo->driver));
+	strlcpy(drvinfo->version, UTS_RELEASE, sizeof(drvinfo->version));
+}
+
+static const struct ethtool_ops rocker_port_ethtool_ops = {
+	.get_drvinfo		= rocker_port_get_drvinfo,
+	.get_link		= ethtool_op_get_link,
+};
+
 static void rocker_remove_ports(struct rocker *rocker)
 {
 	int i;
@@ -294,6 +308,7 @@ static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 
 	eth_hw_addr_random(dev);
 	dev->netdev_ops = &rocker_port_netdev_ops;
+	dev->ethtool_ops = &rocker_port_ethtool_ops;
 	netif_carrier_off(dev);
 
 	err = register_netdev(dev);
