@@ -466,6 +466,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_basic_hw_test;
 	}
 
+	rocker_write32(rocker, CONTROL, ROCKER_CONTROL_RESET);
+
 	err = request_irq(pdev->irq, rocker_irq_handler, 0,
 			  rocker_driver_name, rocker);
 	if (err) {
