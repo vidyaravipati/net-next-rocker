@@ -45,6 +45,9 @@ struct rocker {
 	u32 status;
 	unsigned port_count;
 	struct rocker_port **ports;
+	struct {
+		u64 id;
+	} hw;
 };
 
 #define rocker_write32(rocker, reg, val)	\
@@ -300,8 +303,20 @@ static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
+static int rocker_port_swdev_get_id(struct net_device *dev,
+				    struct netdev_phys_item_id *psid)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+	struct rocker *rocker = rocker_port->rocker;
+
+	psid->id_len = sizeof(rocker->hw.id);
+	memcpy(&psid->id, &rocker->hw.id, psid->id_len);
+	return 0;
+}
+
 static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_start_xmit		= rocker_port_xmit,
+	.ndo_swdev_get_id	= rocker_port_swdev_get_id,
 };
 
 static void rocker_port_get_drvinfo(struct net_device *dev,
@@ -445,6 +460,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 					 ROCKER_IRQ_CMD_DMA_DONE |
 					 ROCKER_IRQ_EVENT_DMA_DONE);
 
+	rocker->hw.id = rocker_read64(rocker, SWITCH_ID);
+
 	err = rocker_probe_ports(rocker);
 	if (err) {
 		dev_err(&pdev->dev, "failed to probe ports\n");
@@ -452,6 +469,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	rocker_link_changed(rocker);
+
+	dev_info(&pdev->dev, "Rocker switch with id %016llx\n", rocker->hw.id);
 
 	return 0;
 
