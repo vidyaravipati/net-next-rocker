@@ -252,8 +252,20 @@ free_irq:
 	return err;
 }
 
+static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
+{
+	u64 val = rocker_read64(rocker_port->rocker, PORT_PHYS_ENABLE);
+
+	if (enable)
+		val |= 1 << (rocker_port->port_number + 1);
+	else
+		val &= !(1 << (rocker_port->port_number + 1));
+	rocker_write64(rocker_port->rocker, PORT_PHYS_ENABLE, val);
+}
+
 static void rocker_port_link_up(struct rocker_port *rocker_port)
 {
+	rocker_port_set_enable(rocker_port, true);
 	netif_carrier_on(rocker_port->dev);
 	netdev_info(rocker_port->dev, "Link is up\n");
 }
@@ -261,6 +273,7 @@ static void rocker_port_link_up(struct rocker_port *rocker_port)
 static void rocker_port_link_down(struct rocker_port *rocker_port)
 {
 	netif_carrier_off(rocker_port->dev);
+	rocker_port_set_enable(rocker_port, false);
 	netdev_info(rocker_port->dev, "Link is down\n");
 }
 
