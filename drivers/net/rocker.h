@@ -14,6 +14,8 @@
 #define PCI_VENDOR_ID_REDHAT		0x1b36
 #define PCI_DEVICE_ID_REDHAT_ROCKER	0x0006
 
+#define ROCKER_PCI_BAR0_SIZE		0x1000
+
 /*
  * Rocker test registers
  */

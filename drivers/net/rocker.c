@@ -430,6 +430,11 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		}
 	}
 
+	if (pci_resource_len(pdev, 0) < ROCKER_PCI_BAR0_SIZE) {
+		dev_err(&pdev->dev, "invalid PCI region size\n");
+		goto err_pci_resource_len_check;
+	}
+
 	rocker->hw_addr = ioremap(pci_resource_start(pdev, 0),
 				  pci_resource_len(pdev, 0));
 	if (!rocker->hw_addr) {
@@ -480,6 +485,7 @@ err_request_irq:
 err_basic_hw_test:
 	iounmap(rocker->hw_addr);
 err_ioremap:
+err_pci_resource_len_check:
 err_pci_set_dma_mask:
 	pci_release_regions(pdev);
 err_pci_request_regions:
