@@ -38,6 +38,24 @@ struct rocker_port {
 	unsigned port_number;
 };
 
+struct rocker_dma_desc_info {
+	char *data; /* mapped */
+	size_t data_size;
+	size_t tlv_size;
+	struct rocker_dma_desc *desc;
+	DEFINE_DMA_UNMAP_ADDR(mapaddr);
+};
+
+struct rocker_dma_ring_info {
+	size_t size;
+	u32 head;
+	u32 tail;
+	struct rocker_dma_desc *desc; /* mapped */
+	dma_addr_t mapaddr;
+	struct rocker_dma_desc_info *desc_info;
+	enum rocker_dma_type type;
+};
+
 struct rocker {
 	struct pci_dev *pdev;
 	u8 __iomem *hw_addr;
@@ -250,6 +268,186 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 free_irq:
 	free_irq(pdev->irq, rocker);
 	return err;
+}
+
+static u32 __pos_inc(u32 pos, size_t limit)
+{
+	return ++pos == limit ? 0 : pos;
+}
+
+static void rocker_dma_desc_gen_clear(struct rocker_dma_desc_info *desc_info)
+{
+	desc_info->desc->comp_status &= ~ROCKER_DMA_DESC_COMP_STATUS_GEN;
+}
+
+static bool rocker_dma_desc_gen(struct rocker_dma_desc_info *desc_info)
+{
+	u32 comp_status = desc_info->desc->comp_status;
+
+	return comp_status & ROCKER_DMA_DESC_COMP_STATUS_GEN ? true : false;
+}
+
+static struct rocker_dma_desc_info *
+rocker_dma_desc_head_next_get(struct rocker_dma_ring_info *info)
+{
+	static struct rocker_dma_desc_info *desc_info;
+	/* Get a describtor ahead of head, that is the first unused */
+	u32 head = __pos_inc(info->head, info->size);
+
+	if (head == info->tail)
+		return NULL; /* ring full */
+	desc_info = &info->desc_info[head];
+	if (rocker_dma_desc_gen(desc_info))
+		return NULL; /* ring full */
+	desc_info->tlv_size = 0;
+	return desc_info;
+}
+
+static void rocker_dma_desc_head_set(struct rocker *rocker,
+				     struct rocker_dma_ring_info *info,
+				     struct rocker_dma_desc_info *desc_info)
+{
+	u32 head = (struct rocker_dma_desc_info *) desc_info - info->desc_info;
+
+	BUG_ON(head != __pos_inc(info->head, info->size));
+	desc_info->desc->buf_size = desc_info->data_size;
+	desc_info->desc->tlv_size = desc_info->tlv_size;
+	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
+	info->head = head;
+}
+
+static struct rocker_dma_desc_info *
+rocker_dma_desc_tail_get(struct rocker_dma_ring_info *info)
+{
+	static struct rocker_dma_desc_info *desc_info;
+	u32 tail;
+
+	if (info->tail == info->head)
+		return NULL; /* no thing to be done between head and tail */
+	tail = __pos_inc(info->tail, info->size);
+	desc_info = &info->desc_info[tail];
+	if (!rocker_dma_desc_gen(desc_info))
+		return NULL; /* gen bit not set, desc is not ready yet */
+	info->tail = tail;
+	desc_info->tlv_size = desc_info->desc->tlv_size;
+	return desc_info;
+}
+
+static unsigned long rocker_dma_ring_size_fix(size_t size)
+{
+	return max(ROCKER_DMA_SIZE_MIN,
+		   min(roundup_pow_of_two(size), ROCKER_DMA_SIZE_MAX));
+}
+
+static int rocker_dma_ring_create(struct rocker *rocker,
+				  enum rocker_dma_type type,
+				  size_t size,
+				  struct rocker_dma_ring_info *info)
+{
+	int i;
+
+	BUG_ON(size != rocker_dma_ring_size_fix(size));
+	info->size = size;
+	info->type = type;
+	info->head = info->tail = info->size - 1;
+	info->desc_info = kzalloc(info->size * sizeof(*info->desc_info),
+				  GFP_KERNEL);
+	if (!info->desc_info)
+		return -ENOMEM;
+
+	info->desc = pci_alloc_consistent(rocker->pdev,
+					  info->size * sizeof(*info->desc),
+					  &info->mapaddr);
+	if (!info->desc) {
+		kfree(info->desc_info);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < info->size; i++)
+		info->desc_info[i].desc = &info->desc[i];
+
+	rocker_write64(rocker, DMA_DESC_ADDR(info->type), info->mapaddr);
+	rocker_write32(rocker, DMA_DESC_SIZE(info->type), info->size);
+
+	return 0;
+}
+
+static void rocker_dma_ring_destroy(struct rocker *rocker,
+				    struct rocker_dma_ring_info *info)
+{
+	rocker_write64(rocker, DMA_DESC_ADDR(info->type), 0);
+	rocker_write32(rocker, DMA_DESC_SIZE(info->type), 0);
+
+	pci_free_consistent(rocker->pdev,
+			    info->size * sizeof(struct rocker_dma_desc),
+			    info->desc, info->mapaddr);
+	kfree(info->desc_info);
+}
+
+static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
+				      struct rocker_dma_ring_info *info,
+				      int direction, size_t buf_size)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int i;
+	int err;
+
+	for (i = 0; i < info->size; i++) {
+		struct rocker_dma_desc_info *desc_info = &info->desc_info[i];
+		struct rocker_dma_desc *desc = &info->desc[i];
+		dma_addr_t dma_handle;
+		char *buf;
+
+		buf = kzalloc(buf_size, GFP_KERNEL | GFP_DMA);
+		if (!buf) {
+			err = -ENOMEM;
+			goto rollback;
+		}
+
+		dma_handle = pci_map_single(pdev, buf, buf_size, direction);
+		if (pci_dma_mapping_error(pdev, dma_handle)) {
+			kfree(buf);
+			err = -EIO;
+			goto rollback;
+		}
+
+		desc_info->data = buf;
+		desc_info->data_size = buf_size;
+		dma_unmap_addr_set(desc_info, mapaddr, dma_handle);
+
+		desc->buf_addr = dma_handle;
+		desc->buf_size = buf_size;
+	}
+	return 0;
+
+rollback:
+	for (i--; i >= 0; i--) {
+		struct rocker_dma_desc_info *desc_info = &info->desc_info[i];
+
+		pci_unmap_single(pdev, dma_unmap_addr(desc_info, mapaddr),
+				 desc_info->data_size, direction);
+		kfree(desc_info->data);
+	}
+	return err;
+}
+
+static void rocker_dma_ring_bufs_free(struct rocker *rocker,
+				      struct rocker_dma_ring_info *info,
+				      int direction)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int i;
+
+	for (i = 0; i < info->size; i++) {
+		struct rocker_dma_desc_info *desc_info = &info->desc_info[i];
+		struct rocker_dma_desc *desc = &info->desc[i];
+
+		desc->buf_addr = 0;
+		desc->buf_size = 0;
+		pci_unmap_single(pdev, dma_unmap_addr(desc_info, mapaddr),
+				 desc_info->data_size, direction);
+		kfree(desc_info->data);
+	}
 }
 
 static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
