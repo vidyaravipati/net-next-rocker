@@ -66,6 +66,7 @@ struct rocker {
 	struct {
 		u64 id;
 	} hw;
+	struct rocker_dma_ring_info cmd_ring;
 };
 
 #define rocker_write32(rocker, reg, val)	\
@@ -450,6 +451,40 @@ static void rocker_dma_ring_bufs_free(struct rocker *rocker,
 	}
 }
 
+static int rocker_dma_rings_init(struct rocker *rocker)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int err;
+
+	err = rocker_dma_ring_create(rocker, ROCKER_DMA_CMD,
+				     ROCKER_DMA_CMD_DEFAULT_SIZE,
+				     &rocker->cmd_ring);
+	if (err) {
+		dev_err(&pdev->dev, "failed to create command dma ring\n");
+		return err;
+	}
+
+	err = rocker_dma_ring_bufs_alloc(rocker, &rocker->cmd_ring,
+					 PCI_DMA_BIDIRECTIONAL, PAGE_SIZE);
+	if (err) {
+		dev_err(&pdev->dev, "failed to alloc command dma ring buffers\n");
+		goto err_dma_ring_bufs_alloc;
+	}
+
+	return 0;
+
+err_dma_ring_bufs_alloc:
+	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
+	return err;
+}
+
+static void rocker_dma_rings_fini(struct rocker *rocker)
+{
+	rocker_dma_ring_bufs_free(rocker, &rocker->cmd_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
+}
+
 static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 {
 	u64 val = rocker_read64(rocker_port->rocker, PORT_PHYS_ENABLE);
@@ -494,6 +529,12 @@ static void rocker_link_changed(struct rocker *rocker)
 	}
 }
 
+static void rocker_cmd_irq_handler(struct rocker *rocker)
+{
+	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
+		wake_up(&rocker->wait);
+}
+
 static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
@@ -504,6 +545,9 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 
 	if (status & ROCKER_IRQ_LINK)
 		rocker_link_changed(rocker);
+
+	if (status & ROCKER_IRQ_CMD_DMA_DONE)
+		rocker_cmd_irq_handler(rocker);
 
 	return IRQ_HANDLED;
 }
@@ -666,6 +710,10 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	rocker_write32(rocker, CONTROL, ROCKER_CONTROL_RESET);
 
+	err = rocker_dma_rings_init(rocker);
+	if (err)
+		goto err_dma_rings_init;
+
 	err = request_irq(pdev->irq, rocker_irq_handler, 0,
 			  rocker_driver_name, rocker);
 	if (err) {
@@ -695,6 +743,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 err_probe_ports:
 	free_irq(pdev->irq, rocker);
 err_request_irq:
+	rocker_dma_rings_fini(rocker);
+err_dma_rings_init:
 err_basic_hw_test:
 	iounmap(rocker->hw_addr);
 err_ioremap:
@@ -714,6 +764,7 @@ static void rocker_remove(struct pci_dev *pdev)
 
 	rocker_remove_ports(rocker);
 	free_irq(rocker->pdev->irq, rocker);
+	rocker_dma_rings_fini(rocker);
 	iounmap(rocker->hw_addr);
 	pci_release_regions(rocker->pdev);
 	pci_disable_device(rocker->pdev);
