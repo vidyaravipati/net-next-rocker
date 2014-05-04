@@ -11,6 +11,8 @@
 #ifndef _ROCKER_H
 #define _ROCKER_H
 
+#include <linux/types.h>
+
 #define PCI_VENDOR_ID_REDHAT		0x1b36
 #define PCI_DEVICE_ID_REDHAT_ROCKER	0x0006
 
@@ -48,6 +50,47 @@
 #define ROCKER_IRQ_CMD_DMA_DONE		(1 << 3)
 #define ROCKER_IRQ_EVENT_DMA_DONE	(1 << 4)
 #define ROCKER_IRQ_TEST_DMA_DONE	(1 << 5)
+
+/*
+ * Rocker DMA ring register offsets
+ */
+#define ROCKER_DMA_DESC_ADDR(x)		(0x0100 + (x) * 32)  /* 8-byte */
+#define ROCKER_DMA_DESC_SIZE(x)		(0x0108 + (x) * 32)
+#define ROCKER_DMA_DESC_HEAD(x)		(0x010c + (x) * 32)
+#define ROCKER_DMA_DESC_TAIL(x)		(0x0110 + (x) * 32)
+#define ROCKER_DMA_DESC_CTRL(x)		(0x0114 + (x) * 32)
+#define ROCKER_DMA_DESC_RES1(x)		(0x0118 + (x) * 32)
+#define ROCKER_DMA_DESC_RES2(x)		(0x011c + (x) * 32)
+
+/*
+ * Rocker DMA ring types
+ */
+enum rocker_dma_type {
+	ROCKER_DMA_TX,
+	ROCKER_DMA_RX,
+	ROCKER_DMA_CMD,
+	ROCKER_DMA_EVENT,
+};
+
+/*
+ * Rocker DMA ring size limits and default sizes
+ */
+#define ROCKER_DMA_SIZE_MIN		2ul
+#define ROCKER_DMA_SIZE_MAX		65536ul
+#define ROCKER_DMA_CMD_DEFAULT_SIZE	32ul
+
+/*
+ * Rocker DMA descriptor struct
+ */
+struct rocker_dma_desc {
+	u64 buf_addr;
+	u64 cookie;
+	u16 buf_size;
+	u16 tlv_size;
+	u16 comp_status;
+} __attribute__((packed, aligned (8)));
+
+#define ROCKER_DMA_DESC_COMP_STATUS_GEN	(1 << 31)
 
 /*
  * Rocker general purpose registers
