@@ -127,7 +127,7 @@ static int rocker_dma_test_offset(struct rocker *rocker, int offset)
 	int i;
 	int err;
 
-	alloc = kzalloc(ROCKER_TEST_DMA_BUF_SIZE * 2 + offset, GFP_KERNEL);
+	alloc = kzalloc(ROCKER_TEST_DMA_BUF_SIZE * 2 + offset, GFP_KERNEL | GFP_DMA);
 	if (!alloc)
 		return -ENOMEM;
 	buf = alloc + offset;
