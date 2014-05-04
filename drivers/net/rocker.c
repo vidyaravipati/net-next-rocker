@@ -276,6 +276,187 @@ free_irq:
 	return err;
 }
 
+/******
+ * TLV
+ ******/
+
+#define ROCKER_TLV_ALIGNTO 8U
+#define ROCKER_TLV_ALIGN(len) \
+	(((len) + ROCKER_TLV_ALIGNTO - 1) & ~(ROCKER_TLV_ALIGNTO - 1))
+#define ROCKER_TLV_HDRLEN ROCKER_TLV_ALIGN(sizeof(struct rocker_dma_tlv))
+
+/*
+ *  <------- ROCKER_TLV_HDRLEN -------> <--- ROCKER_TLV_ALIGN(payload) --->
+ * +-----------------------------+- - -+- - - - - - - - - - - - - - -+- - -+
+ * |             Header          | Pad |           Payload           | Pad |
+ * |   (struct rocker_dma_tlv)   | ing |                             | ing |
+ * +-----------------------------+- - -+- - - - - - - - - - - - - - -+- - -+
+ *  <--------------------------- tlv->len -------------------------->
+ */
+
+static struct rocker_dma_tlv *rocker_tlv_next(const struct rocker_dma_tlv *tlv,
+					      int *remaining)
+{
+	int totlen = ROCKER_TLV_ALIGN(tlv->len);
+
+	*remaining -= totlen;
+	return (struct rocker_dma_tlv *) ((char *) tlv + totlen);
+}
+
+static int rocker_tlv_ok(const struct rocker_dma_tlv *tlv, int remaining)
+{
+	return remaining >= (int) ROCKER_TLV_HDRLEN &&
+	       tlv->len >= ROCKER_TLV_HDRLEN &&
+	       tlv->len <= remaining;
+}
+
+#define rocker_tlv_for_each_attr(pos, head, len, rem) \
+	for (pos = head, rem = len; \
+	     rocker_tlv_ok(pos, rem); \
+	     pos = rocker_tlv_next(pos, &(rem)))
+
+static int rocker_tlv_attr_size(int payload)
+{
+	return ROCKER_TLV_HDRLEN + payload;
+}
+
+static int rocker_tlv_total_size(int payload)
+{
+	return ROCKER_TLV_ALIGN(rocker_tlv_attr_size(payload));
+}
+
+static int rocker_tlv_padlen(int payload)
+{
+	return rocker_tlv_total_size(payload) - rocker_tlv_attr_size(payload);
+}
+
+static int rocker_tlv_type(const struct rocker_dma_tlv *tlv)
+{
+	return tlv->type;
+}
+
+static void *rocker_tlv_data(const struct rocker_dma_tlv *tlv)
+{
+	return (char *) tlv + ROCKER_TLV_HDRLEN;
+}
+
+static int rocker_tlv_len(const struct rocker_dma_tlv *tlv)
+{
+	return tlv->len - ROCKER_TLV_HDRLEN;
+}
+
+static u8 rocker_tlv_get_u8(const struct rocker_dma_tlv *tlv)
+{
+	return *(u8 *) rocker_tlv_data(tlv);
+}
+
+static u16 rocker_tlv_get_u16(const struct rocker_dma_tlv *tlv)
+{
+	return *(u16 *) rocker_tlv_data(tlv);
+}
+
+static u32 rocker_tlv_get_u32(const struct rocker_dma_tlv *tlv)
+{
+	return *(u16 *) rocker_tlv_data(tlv);
+}
+
+static void rocker_tlv_parse(struct rocker_dma_tlv **tb, int maxtype,
+			     const char *buf, int buf_len)
+{
+	const struct rocker_dma_tlv *tlv;
+	const struct rocker_dma_tlv *head = (const struct rocker_dma_tlv *) buf;
+	int rem;
+
+	memset(tb, 0, sizeof(struct rocker_dma_tlv *) * (maxtype + 1));
+
+	rocker_tlv_for_each_attr(tlv, head, buf_len, rem) {
+		u32 type = rocker_tlv_type(tlv);
+
+		if (type > 0 && type <= maxtype)
+			tb[type] = (struct rocker_dma_tlv *) tlv;
+	}
+}
+
+static void rocker_tlv_parse_nested(struct rocker_dma_tlv **tb, int maxtype,
+				    const struct rocker_dma_tlv *tlv)
+{
+	rocker_tlv_parse(tb, maxtype, rocker_tlv_data(tlv),
+			 rocker_tlv_len(tlv));
+}
+
+static void rocker_tlv_parse_desc(struct rocker_dma_tlv **tb, int maxtype,
+				  struct rocker_dma_desc_info *desc_info)
+{
+	rocker_tlv_parse(tb, maxtype, desc_info->data, desc_info->tlv_size);
+}
+
+static struct rocker_dma_tlv *
+rocker_tlv_start(struct rocker_dma_desc_info *desc_info)
+{
+	return (struct rocker_dma_tlv *) ((char *) desc_info->data +
+						   desc_info->tlv_size);
+}
+
+static int rocker_tlv_put(struct rocker_dma_desc_info *desc_info,
+			  int attrtype, int attrlen, const void *data)
+{
+	int tail_room = desc_info->data_size - desc_info->tlv_size;
+	int total_size = rocker_tlv_total_size(attrlen);
+	struct rocker_dma_tlv *tlv;
+
+	if (unlikely(tail_room < total_size))
+		return -EMSGSIZE;
+
+	tlv = rocker_tlv_start(desc_info);
+	desc_info->tlv_size += total_size;
+	tlv->type = attrtype;
+	tlv->len = rocker_tlv_attr_size(attrlen);
+	memcpy(rocker_tlv_data(tlv), data, attrlen);
+	memset((char *) tlv + tlv->len, 0, rocker_tlv_padlen(attrlen));
+	return 0;
+}
+
+static int rocker_tlv_put_u8(struct rocker_dma_desc_info *desc_info,
+			     int attrtype, u8 value)
+{
+	return rocker_tlv_put(desc_info, attrtype, sizeof(u8), &value);
+}
+
+static int rocker_tlv_put_u16(struct rocker_dma_desc_info *desc_info,
+			      int attrtype, u16 value)
+{
+	return rocker_tlv_put(desc_info, attrtype, sizeof(u16), &value);
+}
+
+static int rocker_tlv_put_u32(struct rocker_dma_desc_info *desc_info,
+			      int attrtype, u32 value)
+{
+	return rocker_tlv_put(desc_info, attrtype, sizeof(u32), &value);
+}
+
+static struct rocker_dma_tlv *
+rocker_tlv_nest_start(struct rocker_dma_desc_info *desc_info, int attrtype)
+{
+	struct rocker_dma_tlv *start = rocker_tlv_start(desc_info);
+
+	if (rocker_tlv_put(desc_info, attrtype, 0, NULL) < 0)
+		return NULL;
+
+	return start;
+}
+
+static void rocker_tlv_nest_end(struct rocker_dma_desc_info *desc_info,
+				struct rocker_dma_tlv *start)
+{
+	start->len = (char * ) rocker_tlv_start(desc_info) - (char *) start;
+}
+
+static void rocker_tlv_nest_cancel(struct rocker_dma_desc_info *desc_info,
+				   struct rocker_dma_tlv *start)
+{
+	desc_info->tlv_size = (char *) start - desc_info->data;
+}
+
 
 /******************************************
  * DMA rings and descriptors manipulations

@@ -93,6 +93,14 @@ struct rocker_dma_desc {
 #define ROCKER_DMA_DESC_COMP_STATUS_GEN	(1 << 31)
 
 /*
+ * Rocker DMA TLV struct
+ */
+struct rocker_dma_tlv {
+	u32 type;
+	u16 len;
+} __attribute__((packed, aligned (8)));
+
+/*
  * Rocker general purpose registers
  */
 #define ROCKER_CONTROL			0x0300
