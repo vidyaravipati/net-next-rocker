@@ -78,6 +78,11 @@ struct rocker {
 #define rocker_read64(rocker, reg)	\
 	readq((rocker)->hw_addr + (ROCKER_ ## reg))
 
+
+/*****************************
+ * HW basic testing functions
+ *****************************/
+
 static int rocker_reg_test(struct rocker *rocker)
 {
 	struct pci_dev *pdev = rocker->pdev;
@@ -270,6 +275,11 @@ free_irq:
 	free_irq(pdev->irq, rocker);
 	return err;
 }
+
+
+/******************************************
+ * DMA rings and descriptors manipulations
+ ******************************************/
 
 static u32 __pos_inc(u32 pos, size_t limit)
 {
@@ -496,6 +506,11 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 	rocker_write64(rocker_port->rocker, PORT_PHYS_ENABLE, val);
 }
 
+
+/********************************
+ * Interrupt handler and helpers
+ ********************************/
+
 static void rocker_port_link_up(struct rocker_port *rocker_port)
 {
 	rocker_port_set_enable(rocker_port, true);
@@ -552,6 +567,11 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+
+/*****************
+ * Net device ops
+ *****************/
+
 static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	dev_kfree_skb(skb);
@@ -574,6 +594,11 @@ static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_swdev_get_id	= rocker_port_swdev_get_id,
 };
 
+
+/********************
+ * ethtool interface
+ ********************/
+
 static void rocker_port_get_drvinfo(struct net_device *dev,
 				    struct ethtool_drvinfo *drvinfo)
 {
@@ -585,6 +610,11 @@ static const struct ethtool_ops rocker_port_ethtool_ops = {
 	.get_drvinfo		= rocker_port_get_drvinfo,
 	.get_link		= ethtool_op_get_link,
 };
+
+
+/*****************
+ * PCI driver ops
+ *****************/
 
 static void rocker_remove_ports(struct rocker *rocker)
 {
@@ -777,6 +807,11 @@ static struct pci_driver rocker_pci_driver = {
 	.probe		= rocker_probe,
 	.remove		= rocker_remove,
 };
+
+
+/***********************
+ * Module init and exit
+ ***********************/
 
 static int __init rocker_module_init(void)
 {
