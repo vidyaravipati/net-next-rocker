@@ -240,7 +240,6 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 		return err;
 	}
 
-	init_waitqueue_head(&rocker->wait);
 	err = request_irq(pdev->irq, rocker_intr_test_irq_handler, 0,
 			  rocker_driver_name, rocker);
 	if (err) {
@@ -868,6 +867,7 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	rocker = kmalloc(sizeof(*rocker), GFP_KERNEL);
 	if (!rocker)
 		return -ENOMEM;
+	init_waitqueue_head(&rocker->wait);
 
 	err = pci_enable_device(pdev);
 	if (err) {
