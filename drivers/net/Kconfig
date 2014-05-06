@@ -367,7 +367,7 @@ source "drivers/net/hyperv/Kconfig"
 
 config ROCKER
 	tristate "Rocker switch driver"
-	depends on PCI && INET
+	depends on PCI && INET && NET_SWITCHDEV
 	help
 	  This driver supports Rocker switch device.
 	  To compile this driver as a module, choose M here: the
