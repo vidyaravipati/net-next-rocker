@@ -779,6 +779,70 @@ static const struct net_device_ops rocker_port_netdev_ops = {
  * ethtool interface
  ********************/
 
+static int rocker_port_get_settings(struct net_device *dev,
+				    struct ethtool_cmd *ecmd)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+	struct rocker *rocker = rocker_port->rocker;
+	struct rocker_dma_desc_info *desc_info;
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
+	struct rocker_dma_tlv *cmd_info;
+	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
+	int err;
+
+	desc_info = rocker_dma_desc_head_next_get(&rocker->cmd_ring);
+	if (!desc_info)
+		return -EAGAIN;
+
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_TYPE,
+			       ROCKER_TLV_CMD_TYPE_GET_PORT_SETTINGS))
+		goto tlv_put_failure;
+	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
+	if (!cmd_info)
+		goto tlv_put_failure;
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_PORT,
+			       rocker_port->port_number + 1))
+		goto tlv_put_failure;
+	rocker_tlv_nest_end(desc_info, cmd_info);
+
+	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
+
+	wait_event_timeout(rocker->wait, rocker_dma_desc_gen(desc_info),
+			   HZ / 10);
+	if (!rocker_dma_desc_gen(desc_info))
+		return -EIO;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_CMD_INFO]) {
+		err = -EIO;
+		goto gen_clear;
+	}
+
+	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_CMD_PORT_SETTINGS_MAX,
+				attrs[ROCKER_TLV_CMD_INFO]);
+	if (!info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED] ||
+	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]) {
+		err = -EIO;
+		goto gen_clear;
+	}
+
+	ecmd->transceiver = XCVR_INTERNAL;
+	ecmd->supported = SUPPORTED_TP;
+	ecmd->phy_address = 0xff;
+	ecmd->port = PORT_TP;
+	ethtool_cmd_speed_set(ecmd, rocker_tlv_get_u32(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED]));
+	ecmd->duplex = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]);
+	err = 0;
+
+gen_clear:
+	rocker_dma_desc_gen_clear(desc_info);
+	return err;
+
+tlv_put_failure:
+	err = -EMSGSIZE;
+	return err;
+}
+
 static void rocker_port_get_drvinfo(struct net_device *dev,
 				    struct ethtool_drvinfo *drvinfo)
 {
@@ -787,6 +851,7 @@ static void rocker_port_get_drvinfo(struct net_device *dev,
 }
 
 static const struct ethtool_ops rocker_port_ethtool_ops = {
+	.get_settings		= rocker_port_get_settings,
 	.get_drvinfo		= rocker_port_get_drvinfo,
 	.get_link		= ethtool_op_get_link,
 };
