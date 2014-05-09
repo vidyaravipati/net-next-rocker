@@ -800,7 +800,7 @@ static int rocker_port_get_settings(struct net_device *dev,
 	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
 	if (!cmd_info)
 		goto tlv_put_failure;
-	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_PORT,
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_LPORT,
 			       rocker_port->port_number + 1))
 		goto tlv_put_failure;
 	rocker_tlv_nest_end(desc_info, cmd_info);
