@@ -386,7 +386,8 @@ static void rocker_tlv_parse_nested(struct rocker_dma_tlv **tb, int maxtype,
 static void rocker_tlv_parse_desc(struct rocker_dma_tlv **tb, int maxtype,
 				  struct rocker_dma_desc_info *desc_info)
 {
-	rocker_tlv_parse(tb, maxtype, desc_info->data, desc_info->tlv_size);
+	rocker_tlv_parse(tb, maxtype, desc_info->data,
+			 desc_info->desc->tlv_size);
 }
 
 static struct rocker_dma_tlv *
@@ -479,17 +480,14 @@ static bool rocker_dma_desc_gen(struct rocker_dma_desc_info *desc_info)
 }
 
 static struct rocker_dma_desc_info *
-rocker_dma_desc_head_next_get(struct rocker_dma_ring_info *info)
+rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 {
 	static struct rocker_dma_desc_info *desc_info;
-	/* Get a describtor ahead of head, that is the first unused */
 	u32 head = __pos_inc(info->head, info->size);
 
 	if (head == info->tail)
 		return NULL; /* ring full */
-	desc_info = &info->desc_info[head];
-	if (rocker_dma_desc_gen(desc_info))
-		return NULL; /* ring full */
+	desc_info = &info->desc_info[info->head];
 	desc_info->tlv_size = 0;
 	return desc_info;
 }
@@ -498,9 +496,9 @@ static void rocker_dma_desc_head_set(struct rocker *rocker,
 				     struct rocker_dma_ring_info *info,
 				     struct rocker_dma_desc_info *desc_info)
 {
-	u32 head = (struct rocker_dma_desc_info *) desc_info - info->desc_info;
+	u32 head = __pos_inc(info->head, info->size);
 
-	BUG_ON(head != __pos_inc(info->head, info->size));
+	BUG_ON(head == info->tail);
 	desc_info->desc->buf_size = desc_info->data_size;
 	desc_info->desc->tlv_size = desc_info->tlv_size;
 	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
@@ -540,7 +538,7 @@ static int rocker_dma_ring_create(struct rocker *rocker,
 	BUG_ON(size != rocker_dma_ring_size_fix(size));
 	info->size = size;
 	info->type = type;
-	info->head = info->tail = info->size - 1;
+	info->head = info->tail = 0;
 	info->desc_info = kzalloc(info->size * sizeof(*info->desc_info),
 				  GFP_KERNEL);
 	if (!info->desc_info)
@@ -790,7 +788,7 @@ static int rocker_port_get_settings(struct net_device *dev,
 	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
 	int err;
 
-	desc_info = rocker_dma_desc_head_next_get(&rocker->cmd_ring);
+	desc_info = rocker_dma_desc_head_get(&rocker->cmd_ring);
 	if (!desc_info)
 		return -EAGAIN;
 
