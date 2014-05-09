@@ -468,14 +468,14 @@ static u32 __pos_inc(u32 pos, size_t limit)
 
 static void rocker_dma_desc_gen_clear(struct rocker_dma_desc_info *desc_info)
 {
-	desc_info->desc->comp_status &= ~ROCKER_DMA_DESC_COMP_STATUS_GEN;
+	desc_info->desc->comp_err &= ~ROCKER_DMA_DESC_COMP_ERR_GEN;
 }
 
 static bool rocker_dma_desc_gen(struct rocker_dma_desc_info *desc_info)
 {
-	u32 comp_status = desc_info->desc->comp_status;
+	u32 comp_err = desc_info->desc->comp_err;
 
-	return comp_status & ROCKER_DMA_DESC_COMP_STATUS_GEN ? true : false;
+	return comp_err & ROCKER_DMA_DESC_COMP_ERR_GEN ? true : false;
 }
 
 static struct rocker_dma_desc_info *

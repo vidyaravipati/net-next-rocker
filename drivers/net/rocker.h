@@ -87,10 +87,11 @@ struct rocker_dma_desc {
 	u64 cookie;
 	u16 buf_size;
 	u16 tlv_size;
-	u16 comp_status;
+	u16 resv[5];
+	u16 comp_err;
 } __attribute__((packed, aligned (8)));
 
-#define ROCKER_DMA_DESC_COMP_STATUS_GEN	(1 << 31)
+#define ROCKER_DMA_DESC_COMP_ERR_GEN	(1 << 15)
 
 /*
  * Rocker DMA TLV struct
