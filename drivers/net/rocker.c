@@ -309,10 +309,14 @@ static int rocker_tlv_ok(const struct rocker_dma_tlv *tlv, int remaining)
 	       tlv->len <= remaining;
 }
 
-#define rocker_tlv_for_each_attr(pos, head, len, rem) \
+#define rocker_tlv_for_each(pos, head, len, rem) \
 	for (pos = head, rem = len; \
 	     rocker_tlv_ok(pos, rem); \
 	     pos = rocker_tlv_next(pos, &(rem)))
+
+#define rocker_tlv_for_each_nested(pos, tlv, rem) \
+	        rocker_tlv_for_each(pos, rocker_tlv_data(tlv), \
+				    rocker_tlv_len(tlv), rem)
 
 static int rocker_tlv_attr_size(int payload)
 {
@@ -373,7 +377,7 @@ static void rocker_tlv_parse(struct rocker_dma_tlv **tb, int maxtype,
 
 	memset(tb, 0, sizeof(struct rocker_dma_tlv *) * (maxtype + 1));
 
-	rocker_tlv_for_each_attr(tlv, head, buf_len, rem) {
+	rocker_tlv_for_each(tlv, head, buf_len, rem) {
 		u32 type = rocker_tlv_type(tlv);
 
 		if (type > 0 && type <= maxtype)
