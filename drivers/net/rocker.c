@@ -680,7 +680,7 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 	if (enable)
 		val |= 1 << (rocker_port->port_number + 1);
 	else
-		val &= !(1 << (rocker_port->port_number + 1));
+		val &= ~(1 << (rocker_port->port_number + 1));
 	rocker_write64(rocker_port->rocker, PORT_PHYS_ENABLE, val);
 }
 
