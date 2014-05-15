@@ -356,7 +356,7 @@ static u16 rocker_tlv_get_u16(const struct rocker_dma_tlv *tlv)
 
 static u32 rocker_tlv_get_u32(const struct rocker_dma_tlv *tlv)
 {
-	return *(u16 *) rocker_tlv_data(tlv);
+	return *(u32 *) rocker_tlv_data(tlv);
 }
 
 static u64 rocker_tlv_get_u64(const struct rocker_dma_tlv *tlv)
