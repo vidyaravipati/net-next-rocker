@@ -691,7 +691,6 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 
 static void rocker_port_link_up(struct rocker_port *rocker_port)
 {
-	rocker_port_set_enable(rocker_port, true);
 	netif_carrier_on(rocker_port->dev);
 	netdev_info(rocker_port->dev, "Link is up\n");
 }
@@ -699,7 +698,6 @@ static void rocker_port_link_up(struct rocker_port *rocker_port)
 static void rocker_port_link_down(struct rocker_port *rocker_port)
 {
 	netif_carrier_off(rocker_port->dev);
-	rocker_port_set_enable(rocker_port, false);
 	netdev_info(rocker_port->dev, "Link is down\n");
 }
 
@@ -750,6 +748,24 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
  * Net device ops
  *****************/
 
+static int rocker_port_open(struct net_device *dev)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+
+	rocker_port_set_enable(rocker_port, true);
+
+	return 0;
+}
+
+static int rocker_port_stop(struct net_device *dev)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+
+	rocker_port_set_enable(rocker_port, false);
+
+	return 0;
+}
+
 static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	dev_kfree_skb(skb);
@@ -768,6 +784,8 @@ static int rocker_port_swdev_get_id(struct net_device *dev,
 }
 
 static const struct net_device_ops rocker_port_netdev_ops = {
+	.ndo_open		= rocker_port_open,
+	.ndo_stop		= rocker_port_stop,
 	.ndo_start_xmit		= rocker_port_xmit,
 	.ndo_swdev_get_id	= rocker_port_swdev_get_id,
 };
