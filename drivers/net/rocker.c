@@ -359,6 +359,11 @@ static u32 rocker_tlv_get_u32(const struct rocker_dma_tlv *tlv)
 	return *(u16 *) rocker_tlv_data(tlv);
 }
 
+static u64 rocker_tlv_get_u64(const struct rocker_dma_tlv *tlv)
+{
+	return *(u64 *) rocker_tlv_data(tlv);
+}
+
 static void rocker_tlv_parse(struct rocker_dma_tlv **tb, int maxtype,
 			     const char *buf, int buf_len)
 {
@@ -432,6 +437,12 @@ static int rocker_tlv_put_u32(struct rocker_dma_desc_info *desc_info,
 			      int attrtype, u32 value)
 {
 	return rocker_tlv_put(desc_info, attrtype, sizeof(u32), &value);
+}
+
+static int rocker_tlv_put_u64(struct rocker_dma_desc_info *desc_info,
+			      int attrtype, u64 value)
+{
+	return rocker_tlv_put(desc_info, attrtype, sizeof(u64), &value);
 }
 
 static struct rocker_dma_tlv *
