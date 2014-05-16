@@ -30,14 +30,6 @@ static DEFINE_PCI_DEVICE_TABLE(rocker_pci_id_table) = {
 	{0}
 };
 
-struct rocker;
-
-struct rocker_port {
-	struct net_device *dev;
-	struct rocker *rocker;
-	unsigned port_number;
-};
-
 struct rocker_dma_desc_info {
 	char *data; /* mapped */
 	size_t data_size;
@@ -54,6 +46,15 @@ struct rocker_dma_ring_info {
 	dma_addr_t mapaddr;
 	struct rocker_dma_desc_info *desc_info;
 	unsigned int type;
+};
+
+struct rocker;
+
+struct rocker_port {
+	struct net_device *dev;
+	struct rocker *rocker;
+	unsigned port_number;
+	struct rocker_dma_ring_info tx_ring;
 };
 
 struct rocker {
@@ -688,6 +689,43 @@ static void rocker_dma_rings_fini(struct rocker *rocker)
 	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
 }
 
+static int rocker_port_dma_rings_init(struct rocker_port *rocker_port)
+{
+	struct rocker *rocker = rocker_port->rocker;
+	int err;
+
+	err = rocker_dma_ring_create(rocker,
+				     ROCKER_DMA_TX(rocker_port->port_number),
+				     ROCKER_DMA_TX_DEFAULT_SIZE,
+				     &rocker_port->tx_ring);
+	if (err) {
+		netdev_err(rocker_port->dev, "failed to create tx dma ring\n");
+		return err;
+	}
+
+	err = rocker_dma_ring_bufs_alloc(rocker, &rocker_port->tx_ring,
+					 PCI_DMA_BIDIRECTIONAL, ROCKER_DMA_TX_DESC_SIZE);
+	if (err) {
+		netdev_err(rocker_port->dev, "failed to alloc tx dma ring buffers\n");
+		goto err_dma_tx_ring_bufs_alloc;
+	}
+
+	return 0;
+
+err_dma_tx_ring_bufs_alloc:
+	rocker_dma_ring_destroy(rocker, &rocker_port->tx_ring);
+	return err;
+}
+
+static void rocker_port_dma_rings_fini(struct rocker_port *rocker_port)
+{
+	struct rocker *rocker = rocker_port->rocker;
+
+	rocker_dma_ring_bufs_free(rocker, &rocker_port->tx_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+	rocker_dma_ring_destroy(rocker, &rocker_port->tx_ring);
+}
+
 static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 {
 	u64 val = rocker_read64(rocker_port->rocker, PORT_PHYS_ENABLE);
@@ -766,9 +804,12 @@ static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
 static int rocker_port_open(struct net_device *dev)
 {
 	struct rocker_port *rocker_port = netdev_priv(dev);
+	int err;
 
+	err = rocker_port_dma_rings_init(rocker_port);
+	if (err)
+		return err;
 	rocker_port_set_enable(rocker_port, true);
-
 	return 0;
 }
 
@@ -777,6 +818,7 @@ static int rocker_port_stop(struct net_device *dev)
 	struct rocker_port *rocker_port = netdev_priv(dev);
 
 	rocker_port_set_enable(rocker_port, false);
+	rocker_port_dma_rings_fini(rocker_port);
 
 	return 0;
 }
