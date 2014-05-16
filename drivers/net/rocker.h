@@ -16,7 +16,7 @@
 #define PCI_VENDOR_ID_REDHAT		0x1b36
 #define PCI_DEVICE_ID_REDHAT_ROCKER	0x0006
 
-#define ROCKER_PCI_BAR0_SIZE		0x1000
+#define ROCKER_PCI_BAR0_SIZE		0x2000
 
 /*
  * Rocker test registers
@@ -54,23 +54,26 @@
 /*
  * Rocker DMA ring register offsets
  */
-#define ROCKER_DMA_DESC_ADDR(x)		(0x0100 + (x) * 32)  /* 8-byte */
-#define ROCKER_DMA_DESC_SIZE(x)		(0x0108 + (x) * 32)
-#define ROCKER_DMA_DESC_HEAD(x)		(0x010c + (x) * 32)
-#define ROCKER_DMA_DESC_TAIL(x)		(0x0110 + (x) * 32)
-#define ROCKER_DMA_DESC_CTRL(x)		(0x0114 + (x) * 32)
-#define ROCKER_DMA_DESC_RES1(x)		(0x0118 + (x) * 32)
-#define ROCKER_DMA_DESC_RES2(x)		(0x011c + (x) * 32)
+#define ROCKER_DMA_DESC_ADDR(x)		(0x1000 + (x) * 32)  /* 8-byte */
+#define ROCKER_DMA_DESC_SIZE(x)		(0x1008 + (x) * 32)
+#define ROCKER_DMA_DESC_HEAD(x)		(0x100c + (x) * 32)
+#define ROCKER_DMA_DESC_TAIL(x)		(0x1010 + (x) * 32)
+#define ROCKER_DMA_DESC_CTRL(x)		(0x1014 + (x) * 32)
+#define ROCKER_DMA_DESC_RES1(x)		(0x1018 + (x) * 32)
+#define ROCKER_DMA_DESC_RES2(x)		(0x101c + (x) * 32)
 
 /*
  * Rocker DMA ring types
  */
 enum rocker_dma_type {
-	ROCKER_DMA_TX,
-	ROCKER_DMA_RX,
 	ROCKER_DMA_CMD,
 	ROCKER_DMA_EVENT,
+	__ROCKER_DMA_TX,
+	__ROCKER_DMA_RX,
+#define ROCKER_DMA_TX(port) (__ROCKER_DMA_TX + (port) * 2)
+#define ROCKER_DMA_RX(port) (__ROCKER_DMA_RX + (port) * 2)
 };
+
 
 /*
  * Rocker DMA ring size limits and default sizes

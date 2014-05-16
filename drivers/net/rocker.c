@@ -53,7 +53,7 @@ struct rocker_dma_ring_info {
 	struct rocker_dma_desc *desc; /* mapped */
 	dma_addr_t mapaddr;
 	struct rocker_dma_desc_info *desc_info;
-	enum rocker_dma_type type;
+	unsigned int type;
 };
 
 struct rocker {
@@ -544,7 +544,7 @@ static unsigned long rocker_dma_ring_size_fix(size_t size)
 }
 
 static int rocker_dma_ring_create(struct rocker *rocker,
-				  enum rocker_dma_type type,
+				  unsigned int type,
 				  size_t size,
 				  struct rocker_dma_ring_info *info)
 {
