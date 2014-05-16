@@ -54,6 +54,7 @@ struct rocker_port {
 	struct net_device *dev;
 	struct rocker *rocker;
 	unsigned port_number;
+	struct napi_struct napi;
 	struct rocker_dma_ring_info tx_ring;
 };
 
@@ -790,6 +791,7 @@ static int rocker_port_open(struct net_device *dev)
 	err = rocker_port_dma_rings_init(rocker_port);
 	if (err)
 		return err;
+	napi_enable(&rocker_port->napi);
 	rocker_port_set_enable(rocker_port, true);
 	return 0;
 }
@@ -799,6 +801,7 @@ static int rocker_port_stop(struct net_device *dev)
 	struct rocker_port *rocker_port = netdev_priv(dev);
 
 	rocker_port_set_enable(rocker_port, false);
+	napi_disable(&rocker_port->napi);
 	rocker_port_dma_rings_fini(rocker_port);
 
 	return 0;
@@ -912,6 +915,22 @@ static const struct ethtool_ops rocker_port_ethtool_ops = {
 
 
 /*****************
+ * NAPI interface
+ *****************/
+
+static int rocker_port_poll(struct napi_struct *napi, int budget)
+{
+	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi);
+	unsigned int work_done = 0;
+
+	if (work_done < budget)
+		napi_complete(napi);
+
+	return work_done;
+}
+
+
+/*****************
  * PCI driver ops
  *****************/
 
@@ -942,6 +961,8 @@ static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 	eth_hw_addr_random(dev);
 	dev->netdev_ops = &rocker_port_netdev_ops;
 	dev->ethtool_ops = &rocker_port_ethtool_ops;
+	netif_napi_add(dev, &rocker_port->napi, rocker_port_poll,
+		       NAPI_POLL_WEIGHT);
 	netif_carrier_off(dev);
 
 	err = register_netdev(dev);
