@@ -60,8 +60,9 @@ struct rocker_port {
 struct rocker {
 	struct pci_dev *pdev;
 	u8 __iomem *hw_addr;
+	struct msix_entry *msix_entries;
 	wait_queue_head_t wait;
-	u32 status;
+	bool wait_done;
 	unsigned port_count;
 	struct rocker_port **ports;
 	struct {
@@ -69,6 +70,11 @@ struct rocker {
 	} hw;
 	struct rocker_dma_ring_info cmd_ring;
 };
+
+static u32 rocker_msix_vector(struct rocker *rocker, unsigned vector)
+{
+	return rocker->msix_entries[vector].vector;
+}
 
 #define rocker_write32(rocker, reg, val)	\
 	writel((val), (rocker)->hw_addr + (ROCKER_ ## reg))
@@ -121,10 +127,11 @@ static int rocker_dma_test_one(struct rocker *rocker, u32 test_type,
 	struct pci_dev *pdev = rocker->pdev;
 	int i;
 
+	rocker->wait_done = false;
 	rocker_write32(rocker, TEST_DMA_CTRL, test_type);
 
-	wait_event_timeout(rocker->wait, rocker->status, HZ / 10);
-	if (!rocker->status) {
+	wait_event_timeout(rocker->wait, rocker->wait_done, HZ / 10);
+	if (!rocker->wait_done) {
 		dev_err(&pdev->dev, "no interrupt received within a timeout\n");
 		return -EIO;
 	}
@@ -167,7 +174,6 @@ static int rocker_dma_test_offset(struct rocker *rocker, int offset)
 
 	rocker_write64(rocker, TEST_DMA_ADDR, dma_handle);
 	rocker_write32(rocker, TEST_DMA_SIZE, ROCKER_TEST_DMA_BUF_SIZE);
-	rocker_write32(rocker, IRQ_MASK, ROCKER_IRQ_TEST_DMA_DONE);
 
 	memset(expect, ROCKER_TEST_DMA_FILL_PATTERN, ROCKER_TEST_DMA_BUF_SIZE);
 	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_FILL,
@@ -215,15 +221,11 @@ static int rocker_dma_test(struct rocker *rocker)
 	return 0;
 }
 
-static irqreturn_t rocker_intr_test_irq_handler(int irq, void *dev_id)
+static irqreturn_t rocker_test_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
-	u32 status = rocker_read32(rocker, IRQ_STAT);
 
-	if (status == 0)
-		return IRQ_NONE;
-
-	rocker->status = status;
+	rocker->wait_done = true;
 	wake_up(&rocker->wait);
 
 	return IRQ_HANDLED;
@@ -232,7 +234,6 @@ static irqreturn_t rocker_intr_test_irq_handler(int irq, void *dev_id)
 static int rocker_basic_hw_test(struct rocker *rocker)
 {
 	struct pci_dev *pdev = rocker->pdev;
-	u32 rnd;
 	int err;
 
 	err = rocker_reg_test(rocker);
@@ -241,28 +242,20 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 		return err;
 	}
 
-	err = request_irq(pdev->irq, rocker_intr_test_irq_handler, 0,
+	err = request_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_TEST),
+			  rocker_test_irq_handler, 0,
 			  rocker_driver_name, rocker);
 	if (err) {
-		dev_err(&pdev->dev, "cannot assign irq %d\n", pdev->irq);
+		dev_err(&pdev->dev, "cannot assign test irq\n");
 		return err;
 	}
 
-	rocker->status = 0;
-	rocker_write32(rocker, IRQ_MASK, 0xFFFFFFFF);
-	while (!(rnd = prandom_u32()));
-	rocker_write32(rocker, TEST_IRQ, rnd);
+	rocker->wait_done = false;
+	rocker_write32(rocker, TEST_IRQ, ROCKER_MSIX_VEC_TEST);
 
-	wait_event_timeout(rocker->wait, rocker->status, HZ / 10);
-	if (!rocker->status) {
+	wait_event_timeout(rocker->wait, rocker->wait_done, HZ / 10);
+	if (!rocker->wait_done) {
 		dev_err(&pdev->dev, "no interrupt received within a timeout\n");
-		err = -EIO;
-		goto free_irq;
-	}
-
-	if (rocker->status != rnd) {
-		dev_err(&pdev->dev, "enexpected irq status %08x, expected %08x\n",
-			rocker->status, rnd);
 		err = -EIO;
 		goto free_irq;
 	}
@@ -272,9 +265,10 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 		dev_err(&pdev->dev, "dma test failed\n");
 
 free_irq:
-	free_irq(pdev->irq, rocker);
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_TEST), rocker);
 	return err;
 }
+
 
 /******
  * TLV
@@ -773,25 +767,12 @@ static void rocker_link_changed(struct rocker *rocker)
 	}
 }
 
-static void rocker_cmd_irq_handler(struct rocker *rocker)
-{
-	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
-		wake_up(&rocker->wait);
-}
-
-static irqreturn_t rocker_irq_handler(int irq, void *dev_id)
+static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
-	u32 status = rocker_read32(rocker, IRQ_STAT);
 
-	if (status == 0)
-		return IRQ_NONE;
-
-	if (status & ROCKER_IRQ_LINK)
-		rocker_link_changed(rocker);
-
-	if (status & ROCKER_IRQ_CMD_DMA_DONE)
-		rocker_cmd_irq_handler(rocker);
+	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
+		wake_up(&rocker->wait);
 
 	return IRQ_HANDLED;
 }
@@ -982,7 +963,6 @@ static int rocker_probe_ports(struct rocker *rocker)
 	size_t alloc_size;
 	int err;
 
-	rocker->port_count = rocker_read32(rocker, PORT_PHYS_COUNT);
 	alloc_size = sizeof(struct rocker_port *) * rocker->port_count;
 	rocker->ports = kmalloc(alloc_size, GFP_KERNEL);
 	for (i = 0; i < rocker->port_count; i++) {
@@ -995,6 +975,45 @@ static int rocker_probe_ports(struct rocker *rocker)
 remove_ports:
 	rocker_remove_ports(rocker);
 	return err;
+}
+
+static int rocker_msix_init(struct rocker *rocker)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int msix_entries;
+	int i;
+	int err;
+
+	msix_entries = pci_msix_vec_count(pdev);
+	if (msix_entries < 0)
+		return msix_entries;
+
+	if (msix_entries != ROCKER_MSIX_VEC_COUNT(rocker->port_count))
+		return -EINVAL;
+
+	rocker->msix_entries = kmalloc(sizeof(struct msix_entry) * msix_entries,
+				       GFP_KERNEL);
+	if (!rocker->msix_entries)
+		return -ENOMEM;
+
+	for (i = 0; i < msix_entries; i++)
+		rocker->msix_entries[i].entry = i;
+
+	err = pci_enable_msix_exact(pdev, rocker->msix_entries, msix_entries);
+	if (err < 0)
+		goto err_enable_msix;
+
+	return 0;
+
+err_enable_msix:
+	kfree(rocker->msix_entries);
+	return err;
+}
+
+static void rocker_msix_fini(struct rocker *rocker)
+{
+	pci_disable_msix(rocker->pdev);
+	kfree(rocker->msix_entries);
 }
 
 static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -1051,6 +1070,14 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	rocker->pdev = pdev;
 	pci_set_drvdata(pdev, rocker);
 
+	rocker->port_count = rocker_read32(rocker, PORT_PHYS_COUNT);
+
+	err = rocker_msix_init(rocker);
+	if (err) {
+		dev_err(&pdev->dev, "MSI-X init failed\n");
+		goto err_msix_init;
+	}
+
 	err = rocker_basic_hw_test(rocker);
 	if (err) {
 		dev_err(&pdev->dev, "basic hw test failed\n");
@@ -1063,17 +1090,13 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (err)
 		goto err_dma_rings_init;
 
-	err = request_irq(pdev->irq, rocker_irq_handler, 0,
+	err = request_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_CMD),
+			  rocker_cmd_irq_handler, 0,
 			  rocker_driver_name, rocker);
 	if (err) {
-		dev_err(&pdev->dev, "cannot assign irq %d\n", pdev->irq);
-		goto err_request_irq;
+		dev_err(&pdev->dev, "cannot assign cmd irq\n");
+		goto err_request_cmd_irq;
 	}
-	rocker_write32(rocker, IRQ_MASK, ROCKER_IRQ_LINK |
-					 ROCKER_IRQ_TX_DMA_DONE |
-					 ROCKER_IRQ_RX_DMA_DONE |
-					 ROCKER_IRQ_CMD_DMA_DONE |
-					 ROCKER_IRQ_EVENT_DMA_DONE);
 
 	rocker->hw.id = rocker_read64(rocker, SWITCH_ID);
 
@@ -1090,11 +1113,13 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	return 0;
 
 err_probe_ports:
-	free_irq(pdev->irq, rocker);
-err_request_irq:
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_CMD), rocker);
+err_request_cmd_irq:
 	rocker_dma_rings_fini(rocker);
 err_dma_rings_init:
 err_basic_hw_test:
+	rocker_msix_fini(rocker);
+err_msix_init:
 	iounmap(rocker->hw_addr);
 err_ioremap:
 err_pci_resource_len_check:
@@ -1112,8 +1137,9 @@ static void rocker_remove(struct pci_dev *pdev)
 	struct rocker *rocker = pci_get_drvdata(pdev);
 
 	rocker_remove_ports(rocker);
-	free_irq(rocker->pdev->irq, rocker);
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_CMD), rocker);
 	rocker_dma_rings_fini(rocker);
+	rocker_msix_fini(rocker);
 	iounmap(rocker->hw_addr);
 	pci_release_regions(rocker->pdev);
 	pci_disable_device(rocker->pdev);
