@@ -785,37 +785,6 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
  * Interrupt handler and helpers
  ********************************/
 
-static void rocker_port_link_up(struct rocker_port *rocker_port)
-{
-	netif_carrier_on(rocker_port->dev);
-	netdev_info(rocker_port->dev, "Link is up\n");
-}
-
-static void rocker_port_link_down(struct rocker_port *rocker_port)
-{
-	netif_carrier_off(rocker_port->dev);
-	netdev_info(rocker_port->dev, "Link is down\n");
-}
-
-static void rocker_link_changed(struct rocker *rocker)
-{
-	u64 link_status = rocker_read64(rocker, PORT_PHYS_LINK_STATUS);
-	struct rocker_port *rocker_port;
-	bool link_up;
-	int i;
-
-	for (i = 0; i < rocker->port_count; i++) {
-		rocker_port = rocker->ports[i];
-		link_up = link_status & (1 << (rocker_port->port_number + 1));
-		if (netif_carrier_ok(rocker_port->dev) != link_up) {
-			if (link_up)
-				rocker_port_link_up(rocker_port);
-			else
-				rocker_port_link_down(rocker_port);
-		}
-	}
-}
-
 static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
@@ -828,12 +797,70 @@ static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static void rocker_port_link_up(struct rocker_port *rocker_port)
+{
+	netif_carrier_on(rocker_port->dev);
+	netdev_info(rocker_port->dev, "Link is up\n");
+}
+
+static void rocker_port_link_down(struct rocker_port *rocker_port)
+{
+	netif_carrier_off(rocker_port->dev);
+	netdev_info(rocker_port->dev, "Link is down\n");
+}
+
+static int rocker_event_process(struct rocker *rocker,
+				struct rocker_dma_desc_info *desc_info)
+{
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_EVENT_MAX + 1];
+	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_EVENT_LINK_CHANGED_MAX + 1];
+	u16 type;
+	unsigned port_number;
+	bool link_up;
+	struct rocker_port *rocker_port;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_EVENT_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_EVENT_TYPE] ||
+	    !attrs[ROCKER_TLV_EVENT_INFO])
+		return -EIO;
+
+	type = rocker_tlv_get_u16(attrs[ROCKER_TLV_EVENT_TYPE]);
+	if (!type)
+		return -EOPNOTSUPP;
+
+	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_EVENT_LINK_CHANGED_MAX,
+				attrs[ROCKER_TLV_EVENT_INFO]);
+	if (!info_attrs[ROCKER_TLV_EVENT_LINK_CHANGED_LPORT] ||
+	    !info_attrs[ROCKER_TLV_EVENT_LINK_CHANGED_LINKUP])
+		return -EIO;
+	port_number = rocker_tlv_get_u32(info_attrs[ROCKER_TLV_EVENT_LINK_CHANGED_LPORT]) - 1;
+	link_up = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_EVENT_LINK_CHANGED_LINKUP]);
+
+	if (port_number >= rocker->port_count)
+		return -EINVAL;
+
+	rocker_port = rocker->ports[port_number];
+	if (netif_carrier_ok(rocker_port->dev) != link_up) {
+		if (link_up)
+			rocker_port_link_up(rocker_port);
+		else
+			rocker_port_link_down(rocker_port);
+	}
+	return 0;
+}
+
 static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
+	struct pci_dev *pdev = rocker->pdev;
 	struct rocker_dma_desc_info *desc_info;
+	int err;
 
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker->event_ring))) {
+		err = rocker_event_process(rocker, desc_info);
+		if (err)
+			dev_err(&pdev->dev, "event processing failed with err %d\n",
+				err);
 		rocker_dma_desc_gen_clear(desc_info);
 		rocker_dma_desc_head_inc(rocker, &rocker->event_ring);
 	}
@@ -1161,6 +1188,19 @@ static int rocker_port_poll(struct napi_struct *napi, int budget)
  * PCI driver ops
  *****************/
 
+static void rocker_carrier_init(struct rocker_port *rocker_port)
+{
+	struct rocker *rocker = rocker_port->rocker;
+	u64 link_status = rocker_read64(rocker, PORT_PHYS_LINK_STATUS);
+	bool link_up;
+
+	link_up = link_status & (1 << (rocker_port->port_number + 1));
+	if (link_up)
+		netif_carrier_on(rocker_port->dev);
+	else
+		netif_carrier_off(rocker_port->dev);
+}
+
 static void rocker_remove_ports(struct rocker *rocker)
 {
 	int i;
@@ -1190,7 +1230,7 @@ static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 	dev->ethtool_ops = &rocker_port_ethtool_ops;
 	netif_napi_add(dev, &rocker_port->napi, rocker_port_poll,
 		       NAPI_POLL_WEIGHT);
-	netif_carrier_off(dev);
+	rocker_carrier_init(rocker_port);
 
 	err = register_netdev(dev);
 	if (err) {
@@ -1361,8 +1401,6 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_err(&pdev->dev, "failed to probe ports\n");
 		goto err_probe_ports;
 	}
-
-	rocker_link_changed(rocker);
 
 	dev_info(&pdev->dev, "Rocker switch with id %016llx\n", rocker->hw.id);
 
