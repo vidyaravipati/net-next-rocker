@@ -72,6 +72,7 @@ struct rocker {
 		u64 id;
 	} hw;
 	struct rocker_dma_ring_info cmd_ring;
+	struct rocker_dma_ring_info event_ring;
 };
 
 static u32 rocker_msix_vector(struct rocker *rocker, unsigned vector)
@@ -694,18 +695,40 @@ static int rocker_dma_rings_init(struct rocker *rocker)
 					 PCI_DMA_BIDIRECTIONAL, PAGE_SIZE);
 	if (err) {
 		dev_err(&pdev->dev, "failed to alloc command dma ring buffers\n");
-		goto err_dma_ring_bufs_alloc;
+		goto err_dma_cmd_ring_bufs_alloc;
 	}
 
+	err = rocker_dma_ring_create(rocker, ROCKER_DMA_EVENT,
+				     ROCKER_DMA_EVENT_DEFAULT_SIZE,
+				     &rocker->event_ring);
+	if (err) {
+		dev_err(&pdev->dev, "failed to create event dma ring\n");
+		goto err_dma_event_ring_create;
+	}
+
+	err = rocker_dma_ring_bufs_alloc(rocker, &rocker->event_ring,
+					 PCI_DMA_FROMDEVICE, PAGE_SIZE);
+	if (err) {
+		dev_err(&pdev->dev, "failed to alloc event dma ring buffers\n");
+		goto err_dma_event_ring_bufs_alloc;
+	}
 	return 0;
 
-err_dma_ring_bufs_alloc:
+err_dma_event_ring_bufs_alloc:
+	rocker_dma_ring_destroy(rocker, &rocker->event_ring);
+err_dma_event_ring_create:
+	rocker_dma_ring_bufs_free(rocker, &rocker->cmd_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+err_dma_cmd_ring_bufs_alloc:
 	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
 	return err;
 }
 
 static void rocker_dma_rings_fini(struct rocker *rocker)
 {
+	rocker_dma_ring_bufs_free(rocker, &rocker->event_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+	rocker_dma_ring_destroy(rocker, &rocker->event_ring);
 	rocker_dma_ring_bufs_free(rocker, &rocker->cmd_ring,
 				  PCI_DMA_BIDIRECTIONAL);
 	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
@@ -803,6 +826,19 @@ static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 
 	rocker->wait_done = true;
 	wake_up(&rocker->wait);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
+{
+	struct rocker *rocker = dev_id;
+	struct rocker_dma_desc_info *desc_info;
+
+	while ((desc_info = rocker_dma_desc_tail_get(&rocker->event_ring))) {
+		rocker_dma_desc_gen_clear(desc_info);
+		rocker_dma_desc_head_inc(rocker, &rocker->event_ring);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -1312,6 +1348,14 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_request_cmd_irq;
 	}
 
+	err = request_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_EVENT),
+			  rocker_event_irq_handler, 0,
+			  rocker_driver_name, rocker);
+	if (err) {
+		dev_err(&pdev->dev, "cannot assign event irq\n");
+		goto err_request_event_irq;
+	}
+
 	rocker->hw.id = rocker_read64(rocker, SWITCH_ID);
 
 	err = rocker_probe_ports(rocker);
@@ -1327,6 +1371,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	return 0;
 
 err_probe_ports:
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_EVENT), rocker);
+err_request_event_irq:
 	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_CMD), rocker);
 err_request_cmd_irq:
 	rocker_dma_rings_fini(rocker);
@@ -1351,6 +1397,7 @@ static void rocker_remove(struct pci_dev *pdev)
 	struct rocker *rocker = pci_get_drvdata(pdev);
 
 	rocker_remove_ports(rocker);
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_EVENT), rocker);
 	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_CMD), rocker);
 	rocker_dma_rings_fini(rocker);
 	rocker_msix_fini(rocker);
