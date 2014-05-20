@@ -16,6 +16,7 @@
 #include <linux/wait.h>
 #include <linux/random.h>
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
@@ -36,6 +37,7 @@ struct rocker_dma_desc_info {
 	size_t tlv_size;
 	struct rocker_dma_desc *desc;
 	DEFINE_DMA_UNMAP_ADDR(mapaddr);
+	struct sk_buff *skb;
 };
 
 struct rocker_dma_ring_info {
@@ -794,6 +796,8 @@ static irqreturn_t rocker_tx_irq_handler(int irq, void *dev_id)
 {
 	struct rocker_port *rocker_port = dev_id;
 
+	disable_irq_nosync(rocker_msix_tx_vector(rocker_port));
+	napi_schedule(&rocker_port->napi);
 	return IRQ_HANDLED;
 }
 
@@ -858,8 +862,123 @@ static int rocker_port_stop(struct net_device *dev)
 	return 0;
 }
 
+static void rocker_tx_desc_frags_unmap(struct rocker_port *rocker_port,
+				       struct rocker_dma_desc_info *desc_info)
+{
+	struct rocker *rocker = rocker_port->rocker;
+	struct pci_dev *pdev = rocker->pdev;
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_TX_MAX + 1];
+	struct rocker_dma_tlv *attr;
+	int rem;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_TX_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_TX_FRAGS])
+		return;
+	rocker_tlv_for_each_nested(attr, attrs[ROCKER_TLV_TX_FRAGS], rem) {
+		struct rocker_dma_tlv *frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_MAX + 1];
+		dma_addr_t dma_handle;
+		size_t len;
+
+		if (rocker_tlv_type(attr) != ROCKER_TLV_TX_FRAG)
+			continue;
+		rocker_tlv_parse_nested(frag_attrs, ROCKER_TLV_TX_FRAG_MAX,
+					attr);
+		if (!frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_ADDR] ||
+		    !frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_LEN])
+			continue;
+		dma_handle = rocker_tlv_get_u64(frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_ADDR]);
+		len = rocker_tlv_get_u16(frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_LEN]);
+		pci_unmap_single(pdev, dma_handle, len, DMA_TO_DEVICE);
+	}
+}
+
+static int rocker_tx_desc_frag_map_put(struct rocker_port *rocker_port,
+				       struct rocker_dma_desc_info *desc_info,
+				       char *buf, size_t buf_len)
+{
+	struct rocker *rocker = rocker_port->rocker;
+	struct pci_dev *pdev = rocker->pdev;
+	dma_addr_t dma_handle;
+	struct rocker_dma_tlv *frag;
+
+	dma_handle = pci_map_single(pdev, buf, buf_len, DMA_TO_DEVICE);
+	if (unlikely(pci_dma_mapping_error(pdev, dma_handle))) {
+		if (net_ratelimit())
+			netdev_err(rocker_port->dev, "failed to dma map tx frag\n");
+		return -EIO;
+	}
+	frag = rocker_tlv_nest_start(desc_info, ROCKER_TLV_TX_FRAGS);
+	if (!frag)
+		goto unmap_frag;
+	if (rocker_tlv_put_u64(desc_info, ROCKER_TLV_TX_FRAG_ATTR_ADDR, dma_handle))
+		goto nest_cancel;
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_TX_FRAG_ATTR_LEN, buf_len))
+		goto nest_cancel;
+	rocker_tlv_nest_end(desc_info, frag);
+	return 0;
+
+nest_cancel:
+	rocker_tlv_nest_cancel(desc_info, frag);
+unmap_frag:
+	pci_unmap_single(pdev, dma_handle, buf_len, DMA_TO_DEVICE);
+	return -EMSGSIZE;
+}
+
 static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 {
+	struct rocker_port *rocker_port = netdev_priv(dev);
+	struct rocker *rocker = rocker_port->rocker;
+	struct rocker_dma_desc_info *desc_info;
+	struct rocker_dma_tlv *frags;
+	int i;
+	int err;
+
+	desc_info = rocker_dma_desc_head_get(&rocker_port->tx_ring);
+	if (unlikely(!desc_info)) {
+		if (net_ratelimit())
+			netdev_err(dev, "tx ring full when queue awake\n");
+		return NETDEV_TX_BUSY;
+	}
+
+	desc_info->skb = skb;
+
+	frags = rocker_tlv_nest_start(desc_info, ROCKER_TLV_TX_FRAGS);
+	if (!frags)
+		goto out;
+	err = rocker_tx_desc_frag_map_put(rocker_port, desc_info,
+					  skb->data, skb_headlen(skb));
+	if (err)
+		goto nest_cancel;
+	if (skb_shinfo(skb)->nr_frags > ROCKER_TX_FRAGS_MAX)
+		goto nest_cancel;
+
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+
+		err = rocker_tx_desc_frag_map_put(rocker_port, desc_info,
+						  skb_frag_address(frag),
+						  skb_frag_size(frag));
+		if (err)
+			goto unmap_frags;
+	}
+	rocker_tlv_nest_end(desc_info, frags);
+
+	rocker_dma_desc_gen_clear(desc_info);
+	rocker_dma_desc_head_set(rocker, &rocker_port->tx_ring, desc_info);
+
+	desc_info = rocker_dma_desc_head_get(&rocker_port->tx_ring);
+	if (!desc_info)
+		netif_stop_queue(dev);
+
+	netdev_sent_queue(dev, skb->len);
+
+	return NETDEV_TX_OK;
+
+unmap_frags:
+	rocker_tx_desc_frags_unmap(rocker_port, desc_info);
+nest_cancel:
+	rocker_tlv_nest_cancel(desc_info, frags);
+out:
 	dev_kfree_skb(skb);
 	return NETDEV_TX_OK;
 }
@@ -972,11 +1091,17 @@ static const struct ethtool_ops rocker_port_ethtool_ops = {
 static int rocker_port_poll(struct napi_struct *napi, int budget)
 {
 	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi);
+	struct rocker_dma_desc_info *desc_info;
 	unsigned int work_done = 0;
 
-	if (work_done < budget)
-		napi_complete(napi);
+	/* Cleanup tx descriptors */
+	while ((desc_info = rocker_dma_desc_tail_get(&rocker_port->tx_ring)))
+		rocker_tx_desc_frags_unmap(rocker_port, desc_info);
 
+	if (work_done < budget) {
+		napi_complete(napi);
+		enable_irq(rocker_msix_tx_vector(rocker_port));
+	}
 	return work_done;
 }
 
