@@ -77,6 +77,18 @@ static u32 rocker_msix_vector(struct rocker *rocker, unsigned vector)
 	return rocker->msix_entries[vector].vector;
 }
 
+static u32 rocker_msix_tx_vector(struct rocker_port *rocker_port)
+{
+	return rocker_msix_vector(rocker_port->rocker,
+				  ROCKER_MSIX_VEC_TX(rocker_port->port_number));
+}
+
+static u32 rocker_msix_rx_vector(struct rocker_port *rocker_port)
+{
+	return rocker_msix_vector(rocker_port->rocker,
+				  ROCKER_MSIX_VEC_RX(rocker_port->port_number));
+}
+
 #define rocker_write32(rocker, reg, val)	\
 	writel((val), (rocker)->hw_addr + (ROCKER_ ## reg))
 #define rocker_read32(rocker, reg)	\
@@ -778,6 +790,20 @@ static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t rocker_tx_irq_handler(int irq, void *dev_id)
+{
+	struct rocker_port *rocker_port = dev_id;
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t rocker_rx_irq_handler(int irq, void *dev_id)
+{
+	struct rocker_port *rocker_port = dev_id;
+
+	return IRQ_HANDLED;
+}
+
 
 /*****************
  * Net device ops
@@ -791,9 +817,32 @@ static int rocker_port_open(struct net_device *dev)
 	err = rocker_port_dma_rings_init(rocker_port);
 	if (err)
 		return err;
+
+	err = request_irq(rocker_msix_tx_vector(rocker_port),
+			  rocker_tx_irq_handler, 0,
+			  rocker_driver_name, rocker_port);
+	if (err) {
+		netdev_err(rocker_port->dev, "cannot assign tx irq\n");
+		goto err_request_tx_irq;
+	}
+
+	err = request_irq(rocker_msix_rx_vector(rocker_port),
+			  rocker_rx_irq_handler, 0,
+			  rocker_driver_name, rocker_port);
+	if (err) {
+		netdev_err(rocker_port->dev, "cannot assign rx irq\n");
+		goto err_request_rx_irq;
+	}
+
 	napi_enable(&rocker_port->napi);
 	rocker_port_set_enable(rocker_port, true);
 	return 0;
+
+err_request_rx_irq:
+	free_irq(rocker_msix_tx_vector(rocker_port), rocker_port);
+err_request_tx_irq:
+	rocker_port_dma_rings_fini(rocker_port);
+	return err;
 }
 
 static int rocker_port_stop(struct net_device *dev)
@@ -802,6 +851,8 @@ static int rocker_port_stop(struct net_device *dev)
 
 	rocker_port_set_enable(rocker_port, false);
 	napi_disable(&rocker_port->napi);
+	free_irq(rocker_msix_rx_vector(rocker_port), rocker_port);
+	free_irq(rocker_msix_tx_vector(rocker_port), rocker_port);
 	rocker_port_dma_rings_fini(rocker_port);
 
 	return 0;
