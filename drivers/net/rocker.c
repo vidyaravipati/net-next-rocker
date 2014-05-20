@@ -786,8 +786,10 @@ static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
 
-	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
-		wake_up(&rocker->wait);
+	while (rocker_dma_desc_tail_get(&rocker->cmd_ring));
+
+	rocker->wait_done = true;
+	wake_up(&rocker->wait);
 
 	return IRQ_HANDLED;
 }
@@ -1032,11 +1034,13 @@ static int rocker_port_get_settings(struct net_device *dev,
 		goto tlv_put_failure;
 	rocker_tlv_nest_end(desc_info, cmd_info);
 
+	rocker->wait_done = false;
 	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
 
-	wait_event_timeout(rocker->wait, rocker_dma_desc_gen(desc_info),
+	wait_event_timeout(rocker->wait,
+			   rocker_dma_desc_gen(desc_info) && rocker->wait_done,
 			   HZ / 10);
-	if (!rocker_dma_desc_gen(desc_info))
+	if (!(rocker_dma_desc_gen(desc_info) && rocker->wait_done))
 		return -EIO;
 
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
