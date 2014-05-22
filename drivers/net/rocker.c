@@ -523,8 +523,8 @@ static void rocker_dma_desc_head_inc(struct rocker *rocker,
 	u32 head = __pos_inc(info->head, info->size);
 
 	BUG_ON(head == info->tail);
-	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
 	info->head = head;
+	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
 }
 
 static void rocker_dma_desc_head_set(struct rocker *rocker,
