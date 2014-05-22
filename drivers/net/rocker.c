@@ -517,17 +517,23 @@ rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 	return desc_info;
 }
 
-static void rocker_dma_desc_head_set(struct rocker *rocker,
-				     struct rocker_dma_ring_info *info,
-				     struct rocker_dma_desc_info *desc_info)
+static void rocker_dma_desc_head_inc(struct rocker *rocker,
+				     struct rocker_dma_ring_info *info)
 {
 	u32 head = __pos_inc(info->head, info->size);
 
 	BUG_ON(head == info->tail);
-	desc_info->desc->buf_size = desc_info->data_size;
-	desc_info->desc->tlv_size = desc_info->tlv_size;
 	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
 	info->head = head;
+}
+
+static void rocker_dma_desc_head_set(struct rocker *rocker,
+				     struct rocker_dma_ring_info *info,
+				     struct rocker_dma_desc_info *desc_info)
+{
+	desc_info->desc->buf_size = desc_info->data_size;
+	desc_info->desc->tlv_size = desc_info->tlv_size;
+	rocker_dma_desc_head_inc(rocker, info);
 }
 
 static struct rocker_dma_desc_info *
@@ -631,6 +637,13 @@ static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
 
 		desc->buf_addr = dma_handle;
 		desc->buf_size = buf_size;
+
+		/* When this ring is consumer only, we need to advance head
+		 * for each desc. That tells hw that the desc is ready to be
+		 * used by it.
+		 */
+		if (direction == PCI_DMA_FROMDEVICE && i < info->size - 1)
+			rocker_dma_desc_head_inc(rocker, info);
 	}
 	return 0;
 
