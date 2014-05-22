@@ -541,15 +541,13 @@ static struct rocker_dma_desc_info *
 rocker_dma_desc_tail_get(struct rocker_dma_ring_info *info)
 {
 	static struct rocker_dma_desc_info *desc_info;
-	u32 tail;
 
 	if (info->tail == info->head)
 		return NULL; /* no thing to be done between head and tail */
-	tail = __pos_inc(info->tail, info->size);
-	desc_info = &info->desc_info[tail];
+	desc_info = &info->desc_info[info->tail];
 	if (!rocker_dma_desc_gen(desc_info))
 		return NULL; /* gen bit not set, desc is not ready yet */
-	info->tail = tail;
+	info->tail = __pos_inc(info->tail, info->size);
 	desc_info->tlv_size = desc_info->desc->tlv_size;
 	return desc_info;
 }
