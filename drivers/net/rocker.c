@@ -595,7 +595,6 @@ static void rocker_dma_ring_destroy(struct rocker *rocker,
 				    struct rocker_dma_ring_info *info)
 {
 	rocker_write64(rocker, DMA_DESC_ADDR(info->type), 0);
-	rocker_write32(rocker, DMA_DESC_SIZE(info->type), 0);
 
 	pci_free_consistent(rocker->pdev,
 			    info->size * sizeof(struct rocker_dma_desc),
