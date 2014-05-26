@@ -982,7 +982,7 @@ static int rocker_tx_desc_frag_map_put(struct rocker_port *rocker_port,
 			netdev_err(rocker_port->dev, "failed to dma map tx frag\n");
 		return -EIO;
 	}
-	frag = rocker_tlv_nest_start(desc_info, ROCKER_TLV_TX_FRAGS);
+	frag = rocker_tlv_nest_start(desc_info, ROCKER_TLV_TX_FRAG);
 	if (!frag)
 		goto unmap_frag;
 	if (rocker_tlv_put_u64(desc_info, ROCKER_TLV_TX_FRAG_ATTR_ADDR, dma_handle))
