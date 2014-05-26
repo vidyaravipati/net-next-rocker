@@ -1047,8 +1047,6 @@ static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (!desc_info)
 		netif_stop_queue(dev);
 
-	netdev_sent_queue(dev, skb->len);
-
 	return NETDEV_TX_OK;
 
 unmap_frags:
