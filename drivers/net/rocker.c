@@ -958,7 +958,7 @@ static void rocker_tx_desc_frags_unmap(struct rocker_port *rocker_port,
 
 		if (rocker_tlv_type(attr) != ROCKER_TLV_TX_FRAG)
 			continue;
-		rocker_tlv_parse_nested(frag_attrs, ROCKER_TLV_TX_FRAG_MAX,
+		rocker_tlv_parse_nested(frag_attrs, ROCKER_TLV_TX_FRAG_ATTR_MAX,
 					attr);
 		if (!frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_ADDR] ||
 		    !frag_attrs[ROCKER_TLV_TX_FRAG_ATTR_LEN])
