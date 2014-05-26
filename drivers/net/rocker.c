@@ -746,7 +746,7 @@ static int rocker_port_dma_rings_init(struct rocker_port *rocker_port)
 	}
 
 	err = rocker_dma_ring_bufs_alloc(rocker, &rocker_port->tx_ring,
-					 PCI_DMA_BIDIRECTIONAL, ROCKER_DMA_TX_DESC_SIZE);
+					 PCI_DMA_TODEVICE, ROCKER_DMA_TX_DESC_SIZE);
 	if (err) {
 		netdev_err(rocker_port->dev, "failed to alloc tx dma ring buffers\n");
 		goto err_dma_tx_ring_bufs_alloc;
@@ -764,7 +764,7 @@ static void rocker_port_dma_rings_fini(struct rocker_port *rocker_port)
 	struct rocker *rocker = rocker_port->rocker;
 
 	rocker_dma_ring_bufs_free(rocker, &rocker_port->tx_ring,
-				  PCI_DMA_BIDIRECTIONAL);
+				  PCI_DMA_TODEVICE);
 	rocker_dma_ring_destroy(rocker, &rocker_port->tx_ring);
 }
 
