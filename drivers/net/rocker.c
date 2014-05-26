@@ -915,6 +915,7 @@ static int rocker_port_open(struct net_device *dev)
 
 	napi_enable(&rocker_port->napi);
 	rocker_port_set_enable(rocker_port, true);
+	netif_start_queue(dev);
 	return 0;
 
 err_request_rx_irq:
@@ -928,6 +929,7 @@ static int rocker_port_stop(struct net_device *dev)
 {
 	struct rocker_port *rocker_port = netdev_priv(dev);
 
+	netif_stop_queue(dev);
 	rocker_port_set_enable(rocker_port, false);
 	napi_disable(&rocker_port->napi);
 	free_irq(rocker_msix_rx_vector(rocker_port), rocker_port);
