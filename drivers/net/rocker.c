@@ -1172,8 +1172,10 @@ static int rocker_port_poll(struct napi_struct *napi, int budget)
 	unsigned int work_done = 0;
 
 	/* Cleanup tx descriptors */
-	while ((desc_info = rocker_dma_desc_tail_get(&rocker_port->tx_ring)))
+	while ((desc_info = rocker_dma_desc_tail_get(&rocker_port->tx_ring))) {
 		rocker_tx_desc_frags_unmap(rocker_port, desc_info);
+		dev_kfree_skb_any(desc_info->skb);
+	}
 
 	if (work_done < budget) {
 		napi_complete(napi);
