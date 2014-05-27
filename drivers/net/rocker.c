@@ -612,6 +612,20 @@ static void rocker_dma_ring_destroy(struct rocker *rocker,
 	kfree(info->desc_info);
 }
 
+static void rocker_dma_ring_pass_to_producer(struct rocker *rocker,
+					     struct rocker_dma_ring_info *info)
+{
+	int i;
+
+	BUG_ON(info->head || info->tail);
+
+	/* When ring is consumer, we need to advance head for each desc.
+	 * That tells hw that the desc is ready to be used by it.
+	 */
+	for (i = 0; i < info->size - 1; i++)
+		rocker_dma_desc_head_inc(rocker, info);
+}
+
 static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
 				      struct rocker_dma_ring_info *info,
 				      int direction, size_t buf_size)
@@ -645,13 +659,6 @@ static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
 
 		desc->buf_addr = dma_handle;
 		desc->buf_size = buf_size;
-
-		/* When this ring is consumer only, we need to advance head
-		 * for each desc. That tells hw that the desc is ready to be
-		 * used by it.
-		 */
-		if (direction == PCI_DMA_FROMDEVICE && i < info->size - 1)
-			rocker_dma_desc_head_inc(rocker, info);
 	}
 	return 0;
 
@@ -719,6 +726,7 @@ static int rocker_dma_rings_init(struct rocker *rocker)
 		dev_err(&pdev->dev, "failed to alloc event dma ring buffers\n");
 		goto err_dma_event_ring_bufs_alloc;
 	}
+	rocker_dma_ring_pass_to_producer(rocker, &rocker->event_ring);
 	return 0;
 
 err_dma_event_ring_bufs_alloc:
