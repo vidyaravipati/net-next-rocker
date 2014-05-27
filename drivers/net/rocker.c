@@ -19,6 +19,8 @@
 #include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <linux/if_ether.h>
+#include <linux/if_vlan.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
 #include <generated/utsrelease.h>
 
@@ -58,6 +60,7 @@ struct rocker_port {
 	unsigned port_number;
 	struct napi_struct napi;
 	struct rocker_dma_ring_info tx_ring;
+	struct rocker_dma_ring_info rx_ring;
 };
 
 struct rocker {
@@ -743,6 +746,121 @@ static void rocker_dma_rings_fini(struct rocker *rocker)
 	rocker_dma_ring_destroy(rocker, &rocker->cmd_ring);
 }
 
+static int rocker_dma_rx_ring_skb_map(struct rocker *rocker,
+				      struct rocker_port *rocker_port,
+				      struct rocker_dma_desc_info *desc_info,
+				      struct sk_buff *skb, size_t buf_len)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	dma_addr_t dma_handle;
+
+	dma_handle = pci_map_single(pdev, skb->data, buf_len,
+				    PCI_DMA_FROMDEVICE);
+	if (pci_dma_mapping_error(pdev, dma_handle))
+		return -EIO;
+	if (rocker_tlv_put_u64(desc_info, ROCKER_TLV_RX_FRAG_ADDR, dma_handle))
+		goto tlv_put_failure;
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_RX_FRAG_MAX_LEN, buf_len))
+		goto tlv_put_failure;
+	return 0;
+
+tlv_put_failure:
+	pci_unmap_single(pdev, dma_handle, buf_len, PCI_DMA_FROMDEVICE);
+	desc_info->tlv_size = 0;
+	return -EMSGSIZE;
+}
+
+static size_t rocker_port_rx_buf_len(struct rocker_port *rocker_port)
+{
+	return rocker_port->dev->mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
+}
+
+static int rocker_dma_rx_ring_skb_alloc(struct rocker *rocker,
+					struct rocker_port *rocker_port,
+					struct rocker_dma_desc_info *desc_info)
+{
+	struct net_device *dev = rocker_port->dev;
+	struct sk_buff *skb;
+	size_t buf_len = rocker_port_rx_buf_len(rocker_port);
+	int err;
+
+	/* Ensure that hw will see tlv_size zero in case of an error.
+	 * That tells hw to use another descriptor.
+	 */
+	desc_info->skb = NULL;
+	desc_info->tlv_size = 0;
+
+	skb = netdev_alloc_skb_ip_align(dev, buf_len);
+	if (!skb)
+		return -ENOMEM;
+	err = rocker_dma_rx_ring_skb_map(rocker, rocker_port, desc_info,
+					 skb, buf_len);
+	if (err) {
+		dev_kfree_skb_any(skb);
+		return err;
+	}
+	desc_info->skb = skb;
+	return 0;
+}
+
+static void rocker_dma_rx_ring_skb_unmap(struct rocker *rocker,
+					 struct rocker_dma_tlv **attrs)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	dma_addr_t dma_handle;
+	size_t len;
+
+	if (!attrs[ROCKER_TLV_RX_FRAG_ADDR] ||
+	    !attrs[ROCKER_TLV_RX_FRAG_MAX_LEN])
+		return;
+	dma_handle = rocker_tlv_get_u64(attrs[ROCKER_TLV_RX_FRAG_ADDR]);
+	len = rocker_tlv_get_u16(attrs[ROCKER_TLV_RX_FRAG_MAX_LEN]);
+	pci_unmap_single(pdev, dma_handle, len, PCI_DMA_FROMDEVICE);
+}
+
+static void rocker_dma_rx_ring_skb_free(struct rocker *rocker,
+					struct rocker_dma_desc_info *desc_info)
+{
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_RX_MAX + 1];
+
+	if (!desc_info->skb)
+		return;
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_RX_MAX, desc_info);
+	rocker_dma_rx_ring_skb_unmap(rocker, attrs);
+	dev_kfree_skb_any(desc_info->skb);
+}
+
+static int rocker_dma_rx_ring_skbs_alloc(struct rocker *rocker,
+					 struct rocker_port *rocker_port)
+{
+	struct rocker_dma_ring_info *rx_ring = &rocker_port->rx_ring;
+	int i;
+	int err;
+
+	for (i = 0; i < rx_ring->size; i++) {
+		err = rocker_dma_rx_ring_skb_alloc(rocker, rocker_port,
+						   &rx_ring->desc_info[i]);
+		if (err)
+			goto rollback;
+	}
+	return 0;
+
+rollback:
+	for (i--; i >= 0; i--)
+		rocker_dma_rx_ring_skb_free(rocker, &rx_ring->desc_info[i]);
+	return err;
+}
+
+static void rocker_dma_rx_ring_skbs_free(struct rocker *rocker,
+					 struct rocker_port *rocker_port)
+{
+	struct rocker_dma_ring_info *rx_ring = &rocker_port->rx_ring;
+	int i;
+
+	for (i = 0; i < rx_ring->size; i++)
+		rocker_dma_rx_ring_skb_free(rocker, &rx_ring->desc_info[i]);
+}
+
 static int rocker_port_dma_rings_init(struct rocker_port *rocker_port)
 {
 	struct rocker *rocker = rocker_port->rocker;
@@ -764,8 +882,39 @@ static int rocker_port_dma_rings_init(struct rocker_port *rocker_port)
 		goto err_dma_tx_ring_bufs_alloc;
 	}
 
+	err = rocker_dma_ring_create(rocker,
+				     ROCKER_DMA_RX(rocker_port->port_number),
+				     ROCKER_DMA_RX_DEFAULT_SIZE,
+				     &rocker_port->rx_ring);
+	if (err) {
+		netdev_err(rocker_port->dev, "failed to create rx dma ring\n");
+		goto err_dma_rx_ring_create;
+	}
+
+	err = rocker_dma_ring_bufs_alloc(rocker, &rocker_port->rx_ring,
+					 PCI_DMA_BIDIRECTIONAL, ROCKER_DMA_RX_DESC_SIZE);
+	if (err) {
+		netdev_err(rocker_port->dev, "failed to alloc rx dma ring buffers\n");
+		goto err_dma_rx_ring_bufs_alloc;
+	}
+
+	err = rocker_dma_rx_ring_skbs_alloc(rocker, rocker_port);
+	if (err) {
+		netdev_err(rocker_port->dev, "failed to alloc rx dma ring skbs\n");
+		goto err_dma_rx_ring_skbs_alloc;
+	}
+	rocker_dma_ring_pass_to_producer(rocker, &rocker_port->rx_ring);
+
 	return 0;
 
+err_dma_rx_ring_skbs_alloc:
+	rocker_dma_ring_bufs_free(rocker, &rocker_port->rx_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+err_dma_rx_ring_bufs_alloc:
+	rocker_dma_ring_destroy(rocker, &rocker_port->rx_ring);
+err_dma_rx_ring_create:
+	rocker_dma_ring_bufs_free(rocker, &rocker_port->tx_ring,
+				  PCI_DMA_TODEVICE);
 err_dma_tx_ring_bufs_alloc:
 	rocker_dma_ring_destroy(rocker, &rocker_port->tx_ring);
 	return err;
@@ -775,6 +924,10 @@ static void rocker_port_dma_rings_fini(struct rocker_port *rocker_port)
 {
 	struct rocker *rocker = rocker_port->rocker;
 
+	rocker_dma_rx_ring_skbs_free(rocker, rocker_port);
+	rocker_dma_ring_bufs_free(rocker, &rocker_port->rx_ring,
+				  PCI_DMA_BIDIRECTIONAL);
+	rocker_dma_ring_destroy(rocker, &rocker_port->rx_ring);
 	rocker_dma_ring_bufs_free(rocker, &rocker_port->tx_ring,
 				  PCI_DMA_TODEVICE);
 	rocker_dma_ring_destroy(rocker, &rocker_port->tx_ring);
