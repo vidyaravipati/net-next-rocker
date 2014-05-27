@@ -74,6 +74,11 @@ enum {
 #define ROCKER_DMA_DESC_RES1(x)		(0x101c + (x) * 32)
 
 /*
+ * Rocker dma ctrl register bits
+ */
+#define ROCKER_DMA_DESC_CTRL_RESET	(1 << 0)
+
+/*
  * Rocker DMA ring types
  */
 enum rocker_dma_type {

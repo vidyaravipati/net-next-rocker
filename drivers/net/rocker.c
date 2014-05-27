@@ -585,6 +585,8 @@ static int rocker_dma_ring_create(struct rocker *rocker,
 	for (i = 0; i < info->size; i++)
 		info->desc_info[i].desc = &info->desc[i];
 
+	rocker_write32(rocker, DMA_DESC_CTRL(info->type),
+		       ROCKER_DMA_DESC_CTRL_RESET);
 	rocker_write64(rocker, DMA_DESC_ADDR(info->type), info->mapaddr);
 	rocker_write32(rocker, DMA_DESC_SIZE(info->type), info->size);
 
