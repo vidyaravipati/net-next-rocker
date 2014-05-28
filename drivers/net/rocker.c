@@ -787,8 +787,14 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
+	u32 ret_credits = 0;
 
-	while (rocker_dma_desc_tail_get(&rocker->cmd_ring));
+	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
+		ret_credits++;
+
+	if (ret_credits)
+		rocker_write32(rocker, DMA_DESC_CREDITS(ROCKER_DMA_CMD),
+			       ret_credits);
 
 	rocker->wait_done = true;
 	wake_up(&rocker->wait);
@@ -853,6 +859,7 @@ static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
 	struct rocker *rocker = dev_id;
 	struct pci_dev *pdev = rocker->pdev;
 	struct rocker_dma_desc_info *desc_info;
+	u32 ret_credits = 0;
 	int err;
 
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker->event_ring))) {
@@ -862,7 +869,12 @@ static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
 				err);
 		rocker_dma_desc_gen_clear(desc_info);
 		rocker_dma_desc_head_inc(rocker, &rocker->event_ring);
+		ret_credits++;
 	}
+
+	if (ret_credits)
+		rocker_write32(rocker, DMA_DESC_CREDITS(ROCKER_DMA_EVENT),
+			       ret_credits);
 
 	return IRQ_HANDLED;
 }

@@ -70,8 +70,8 @@ enum {
 #define ROCKER_DMA_DESC_HEAD(x)		(0x100c + (x) * 32)
 #define ROCKER_DMA_DESC_TAIL(x)		(0x1010 + (x) * 32)
 #define ROCKER_DMA_DESC_CTRL(x)		(0x1014 + (x) * 32)
-#define ROCKER_DMA_DESC_RES1(x)		(0x1018 + (x) * 32)
-#define ROCKER_DMA_DESC_RES2(x)		(0x101c + (x) * 32)
+#define ROCKER_DMA_DESC_CREDITS(x)	(0x1018 + (x) * 32)
+#define ROCKER_DMA_DESC_RES1(x)		(0x101c + (x) * 32)
 
 /*
  * Rocker DMA ring types
