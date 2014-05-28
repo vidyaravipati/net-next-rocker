@@ -518,23 +518,17 @@ rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 	return desc_info;
 }
 
-static void rocker_dma_desc_head_inc(struct rocker *rocker,
-				     struct rocker_dma_ring_info *info)
-{
-	u32 head = __pos_inc(info->head, info->size);
-
-	BUG_ON(head == info->tail);
-	info->head = head;
-	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
-}
-
 static void rocker_dma_desc_head_set(struct rocker *rocker,
 				     struct rocker_dma_ring_info *info,
 				     struct rocker_dma_desc_info *desc_info)
 {
+	u32 head = __pos_inc(info->head, info->size);
+
+	BUG_ON(head == info->tail);
 	desc_info->desc->buf_size = desc_info->data_size;
 	desc_info->desc->tlv_size = desc_info->tlv_size;
-	rocker_dma_desc_head_inc(rocker, info);
+	info->head = head;
+	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
 }
 
 static struct rocker_dma_desc_info *
@@ -623,7 +617,7 @@ static void rocker_dma_ring_pass_to_producer(struct rocker *rocker,
 	 * That tells hw that the desc is ready to be used by it.
 	 */
 	for (i = 0; i < info->size - 1; i++)
-		rocker_dma_desc_head_inc(rocker, info);
+		rocker_dma_desc_head_set(rocker, info, &info->desc_info[i]);
 }
 
 static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
@@ -884,7 +878,8 @@ static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
 			dev_err(&pdev->dev, "event processing failed with err %d\n",
 				err);
 		rocker_dma_desc_gen_clear(desc_info);
-		rocker_dma_desc_head_inc(rocker, &rocker->event_ring);
+		rocker_dma_desc_head_set(rocker, &rocker->event_ring,
+					 desc_info);
 		credits++;
 	}
 	rocker_dma_ring_credits_set(rocker, &rocker->event_ring, credits);
