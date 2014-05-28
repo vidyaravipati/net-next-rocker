@@ -496,6 +496,11 @@ static u32 __pos_inc(u32 pos, size_t limit)
 	return ++pos == limit ? 0 : pos;
 }
 
+static int rocker_dma_desc_err(struct rocker_dma_desc_info *desc_info)
+{
+	return -(desc_info->desc->comp_err & ~ROCKER_DMA_DESC_COMP_ERR_GEN);
+}
+
 static void rocker_dma_desc_gen_clear(struct rocker_dma_desc_info *desc_info)
 {
 	desc_info->desc->comp_err &= ~ROCKER_DMA_DESC_COMP_ERR_GEN;
@@ -1026,10 +1031,16 @@ static irqreturn_t rocker_event_irq_handler(int irq, void *dev_id)
 	int err;
 
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker->event_ring))) {
-		err = rocker_event_process(rocker, desc_info);
-		if (err)
-			dev_err(&pdev->dev, "event processing failed with err %d\n",
+		err = rocker_dma_desc_err(desc_info);
+		if (err) {
+			dev_err(&pdev->dev, "event desc received with err %d\n",
 				err);
+		} else {
+			err = rocker_event_process(rocker, desc_info);
+			if (err)
+				dev_err(&pdev->dev, "event processing failed with err %d\n",
+					err);
+		}
 		rocker_dma_desc_gen_clear(desc_info);
 		rocker_dma_desc_head_set(rocker, &rocker->event_ring,
 					 desc_info);
@@ -1288,6 +1299,10 @@ static int rocker_port_get_settings(struct net_device *dev,
 	if (!(rocker_dma_desc_gen(desc_info) && rocker->wait_done))
 		return -EIO;
 
+	err = rocker_dma_desc_err(desc_info);
+	if (err)
+		goto gen_clear;
+
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
 	if (!attrs[ROCKER_TLV_CMD_INFO]) {
 		err = -EIO;
@@ -1343,9 +1358,14 @@ static int rocker_port_poll(struct napi_struct *napi, int budget)
 	struct rocker *rocker = rocker_port->rocker;
 	struct rocker_dma_desc_info *desc_info;
 	u32 credits = 0;
+	int err;
 
 	/* Cleanup tx descriptors */
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker_port->tx_ring))) {
+		err = rocker_dma_desc_err(desc_info);
+		if (err && net_ratelimit())
+			netdev_err(rocker_port->dev, "tx desc received with err %d\n",
+				   err);
 		rocker_tx_desc_frags_unmap(rocker_port, desc_info);
 		dev_kfree_skb_any(desc_info->skb);
 		credits++;
