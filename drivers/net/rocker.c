@@ -58,7 +58,8 @@ struct rocker_port {
 	struct net_device *dev;
 	struct rocker *rocker;
 	unsigned port_number;
-	struct napi_struct napi;
+	struct napi_struct napi_tx;
+	struct napi_struct napi_rx;
 	struct rocker_dma_ring_info tx_ring;
 	struct rocker_dma_ring_info rx_ring;
 };
@@ -1055,7 +1056,7 @@ static irqreturn_t rocker_tx_irq_handler(int irq, void *dev_id)
 {
 	struct rocker_port *rocker_port = dev_id;
 
-	napi_schedule(&rocker_port->napi);
+	napi_schedule(&rocker_port->napi_tx);
 	return IRQ_HANDLED;
 }
 
@@ -1063,6 +1064,7 @@ static irqreturn_t rocker_rx_irq_handler(int irq, void *dev_id)
 {
 	struct rocker_port *rocker_port = dev_id;
 
+	napi_schedule(&rocker_port->napi_rx);
 	return IRQ_HANDLED;
 }
 
@@ -1096,7 +1098,8 @@ static int rocker_port_open(struct net_device *dev)
 		goto err_request_rx_irq;
 	}
 
-	napi_enable(&rocker_port->napi);
+	napi_enable(&rocker_port->napi_tx);
+	napi_enable(&rocker_port->napi_rx);
 	rocker_port_set_enable(rocker_port, true);
 	netif_start_queue(dev);
 	return 0;
@@ -1114,7 +1117,8 @@ static int rocker_port_stop(struct net_device *dev)
 
 	netif_stop_queue(dev);
 	rocker_port_set_enable(rocker_port, false);
-	napi_disable(&rocker_port->napi);
+	napi_disable(&rocker_port->napi_rx);
+	napi_disable(&rocker_port->napi_tx);
 	free_irq(rocker_msix_rx_vector(rocker_port), rocker_port);
 	free_irq(rocker_msix_tx_vector(rocker_port), rocker_port);
 	rocker_port_dma_rings_fini(rocker_port);
@@ -1352,9 +1356,9 @@ static const struct ethtool_ops rocker_port_ethtool_ops = {
  * NAPI interface
  *****************/
 
-static int rocker_port_poll(struct napi_struct *napi, int budget)
+static int rocker_port_poll_tx(struct napi_struct *napi, int budget)
 {
-	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi);
+	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi_tx);
 	struct rocker *rocker = rocker_port->rocker;
 	struct rocker_dma_desc_info *desc_info;
 	u32 credits = 0;
@@ -1375,6 +1379,68 @@ static int rocker_port_poll(struct napi_struct *napi, int budget)
 	rocker_dma_ring_credits_set(rocker, &rocker_port->tx_ring, credits);
 
 	return 0;
+}
+
+static int rocker_port_rx_process(struct rocker *rocker,
+				  struct rocker_port *rocker_port,
+				  struct rocker_dma_desc_info *desc_info)
+{
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_RX_MAX + 1];
+	struct sk_buff *skb = desc_info->skb;
+	size_t rx_len;
+
+	if (!skb)
+		return -ENOENT;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_RX_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_RX_FRAG_LEN])
+		return -EINVAL;
+
+	rocker_dma_rx_ring_skb_unmap(rocker, attrs);
+
+	rx_len = rocker_tlv_get_u16(attrs[ROCKER_TLV_RX_FRAG_LEN]);
+	skb_put(skb, rx_len);
+	skb->protocol = eth_type_trans(skb, rocker_port->dev);
+	netif_receive_skb(skb);
+
+	return rocker_dma_rx_ring_skb_alloc(rocker, rocker_port, desc_info);
+}
+
+static int rocker_port_poll_rx(struct napi_struct *napi, int budget)
+{
+	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi_rx);
+	struct rocker *rocker = rocker_port->rocker;
+	struct rocker_dma_desc_info *desc_info;
+	u32 credits = 0;
+	int err;
+
+	/* Process rx descriptors */
+	while (credits < budget &&
+	       (desc_info = rocker_dma_desc_tail_get(&rocker_port->rx_ring))) {
+		err = rocker_dma_desc_err(desc_info);
+		if (err) {
+			if (net_ratelimit())
+				netdev_err(rocker_port->dev, "rx desc received with err %d\n",
+					   err);
+		} else {
+			err = rocker_port_rx_process(rocker, rocker_port,
+						     desc_info);
+			if (err && net_ratelimit())
+				netdev_err(rocker_port->dev, "rx processing failed with err %d\n",
+					   err);
+		}
+		rocker_dma_desc_gen_clear(desc_info);
+		rocker_dma_desc_head_set(rocker, &rocker_port->rx_ring,
+					 desc_info);
+		credits++;
+	}
+
+	if (credits < budget)
+		napi_complete(napi);
+
+	rocker_dma_ring_credits_set(rocker, &rocker_port->rx_ring, credits);
+
+	return credits;
 }
 
 
@@ -1422,7 +1488,9 @@ static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 	eth_hw_addr_random(dev);
 	dev->netdev_ops = &rocker_port_netdev_ops;
 	dev->ethtool_ops = &rocker_port_ethtool_ops;
-	netif_napi_add(dev, &rocker_port->napi, rocker_port_poll,
+	netif_napi_add(dev, &rocker_port->napi_tx, rocker_port_poll_tx,
+		       NAPI_POLL_WEIGHT);
+	netif_napi_add(dev, &rocker_port->napi_rx, rocker_port_poll_rx,
 		       NAPI_POLL_WEIGHT);
 	rocker_carrier_init(rocker_port);
 
