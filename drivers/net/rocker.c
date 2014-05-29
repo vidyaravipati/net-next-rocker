@@ -527,6 +527,13 @@ rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 	return desc_info;
 }
 
+
+static void rocker_dma_desc_commit(struct rocker_dma_desc_info *desc_info)
+{
+	desc_info->desc->buf_size = desc_info->data_size;
+	desc_info->desc->tlv_size = desc_info->tlv_size;
+}
+
 static void rocker_dma_desc_head_set(struct rocker *rocker,
 				     struct rocker_dma_ring_info *info,
 				     struct rocker_dma_desc_info *desc_info)
@@ -534,8 +541,7 @@ static void rocker_dma_desc_head_set(struct rocker *rocker,
 	u32 head = __pos_inc(info->head, info->size);
 
 	BUG_ON(head == info->tail);
-	desc_info->desc->buf_size = desc_info->data_size;
-	desc_info->desc->tlv_size = desc_info->tlv_size;
+	rocker_dma_desc_commit(desc_info);
 	info->head = head;
 	rocker_write32(rocker, DMA_DESC_HEAD(info->type), head);
 }
@@ -627,6 +633,7 @@ static void rocker_dma_ring_pass_to_producer(struct rocker *rocker,
 	 */
 	for (i = 0; i < info->size - 1; i++)
 		rocker_dma_desc_head_set(rocker, info, &info->desc_info[i]);
+	rocker_dma_desc_commit(&info->desc_info[i]);
 }
 
 static int rocker_dma_ring_bufs_alloc(struct rocker *rocker,
