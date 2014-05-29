@@ -888,7 +888,6 @@ static irqreturn_t rocker_tx_irq_handler(int irq, void *dev_id)
 {
 	struct rocker_port *rocker_port = dev_id;
 
-	disable_irq_nosync(rocker_msix_tx_vector(rocker_port));
 	napi_schedule(&rocker_port->napi);
 	return IRQ_HANDLED;
 }
@@ -1185,20 +1184,21 @@ static const struct ethtool_ops rocker_port_ethtool_ops = {
 static int rocker_port_poll(struct napi_struct *napi, int budget)
 {
 	struct rocker_port *rocker_port = container_of(napi, struct rocker_port, napi);
+	struct rocker *rocker = rocker_port->rocker;
 	struct rocker_dma_desc_info *desc_info;
-	unsigned int work_done = 0;
+	u32 credits = 0;
 
 	/* Cleanup tx descriptors */
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker_port->tx_ring))) {
 		rocker_tx_desc_frags_unmap(rocker_port, desc_info);
 		dev_kfree_skb_any(desc_info->skb);
+		credits++;
 	}
 
-	if (work_done < budget) {
-		napi_complete(napi);
-		enable_irq(rocker_msix_tx_vector(rocker_port));
-	}
-	return work_done;
+	napi_complete(napi);
+	rocker_dma_ring_credits_set(rocker, &rocker_port->tx_ring, credits);
+
+	return 0;
 }
 
 
