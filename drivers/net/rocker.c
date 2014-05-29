@@ -1382,6 +1382,9 @@ static int rocker_port_poll_tx(struct napi_struct *napi, int budget)
 		credits++;
 	}
 
+	if (credits && netif_queue_stopped(rocker_port->dev))
+		netif_wake_queue(rocker_port->dev);
+
 	napi_complete(napi);
 	rocker_dma_ring_credits_set(rocker, &rocker_port->tx_ring, credits);
 
