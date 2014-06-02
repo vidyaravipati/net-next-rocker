@@ -514,6 +514,19 @@ static bool rocker_dma_desc_gen(struct rocker_dma_desc_info *desc_info)
 	return comp_err & ROCKER_DMA_DESC_COMP_ERR_GEN ? true : false;
 }
 
+static void *
+rocker_dma_desc_cookie_ptr_get(struct rocker_dma_desc_info *desc_info)
+{
+	return (void *) desc_info->desc->cookie;
+}
+
+static void
+rocker_dma_desc_cookie_ptr_set(struct rocker_dma_desc_info *desc_info,
+			       void *ptr)
+{
+	desc_info->desc->cookie = (long) ptr;
+}
+
 static struct rocker_dma_desc_info *
 rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 {
