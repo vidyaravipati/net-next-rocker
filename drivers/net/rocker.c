@@ -67,8 +67,6 @@ struct rocker {
 	struct pci_dev *pdev;
 	u8 __iomem *hw_addr;
 	struct msix_entry *msix_entries;
-	wait_queue_head_t wait;
-	bool wait_done;
 	unsigned port_count;
 	struct rocker_port **ports;
 	struct {
@@ -1009,15 +1007,16 @@ static void rocker_port_set_enable(struct rocker_port *rocker_port, bool enable)
 static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 {
 	struct rocker *rocker = dev_id;
+	struct rocker_dma_desc_info *desc_info;
+	struct rocker_wait *wait;
 	u32 credits = 0;
 
-	while (rocker_dma_desc_tail_get(&rocker->cmd_ring))
+	while ((desc_info = rocker_dma_desc_tail_get(&rocker->cmd_ring))) {
+		wait = rocker_dma_desc_cookie_ptr_get(desc_info);
+		rocker_wait_wake_up(wait);
 		credits++;
-
+	}
 	rocker_dma_ring_credits_set(rocker, &rocker->cmd_ring, credits);
-
-	rocker->wait_done = true;
-	wake_up(&rocker->wait);
 
 	return IRQ_HANDLED;
 }
@@ -1328,6 +1327,7 @@ static int rocker_port_get_settings(struct net_device *dev,
 	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
 	struct rocker_dma_tlv *cmd_info;
 	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
+	struct rocker_wait wait;
 	int err;
 
 	desc_info = rocker_dma_desc_head_get(&rocker->cmd_ring);
@@ -1345,13 +1345,11 @@ static int rocker_port_get_settings(struct net_device *dev,
 		goto tlv_put_failure;
 	rocker_tlv_nest_end(desc_info, cmd_info);
 
-	rocker->wait_done = false;
+	rocker_dma_desc_cookie_ptr_set(desc_info, &wait);
+	rocker_wait_init(&wait);
 	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
 
-	wait_event_timeout(rocker->wait,
-			   rocker_dma_desc_gen(desc_info) && rocker->wait_done,
-			   HZ / 10);
-	if (!(rocker_dma_desc_gen(desc_info) && rocker->wait_done))
+	if (!rocker_wait_event_timeout(&wait, HZ / 10))
 		return -EIO;
 
 	err = rocker_dma_desc_err(desc_info);
@@ -1628,7 +1626,6 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	rocker = kmalloc(sizeof(*rocker), GFP_KERNEL);
 	if (!rocker)
 		return -ENOMEM;
-	init_waitqueue_head(&rocker->wait);
 
 	err = pci_enable_device(pdev);
 	if (err) {
