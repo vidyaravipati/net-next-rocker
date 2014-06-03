@@ -78,6 +78,37 @@ struct rocker {
 	struct rocker_dma_ring_info event_ring;
 };
 
+struct rocker_wait {
+	wait_queue_head_t wait;
+	bool done;
+};
+
+static void rocker_wait_reset(struct rocker_wait *wait)
+{
+	wait->done = false;
+}
+
+static void rocker_wait_init(struct rocker_wait *wait)
+{
+	init_waitqueue_head(&wait->wait);
+	rocker_wait_reset(wait);
+}
+
+static bool rocker_wait_event_timeout(struct rocker_wait *wait,
+				      unsigned long timeout)
+{
+	wait_event_timeout(wait->wait, wait->done, HZ / 10);
+	if (!wait->done)
+		return false;
+	return true;
+}
+
+static void rocker_wait_wake_up(struct rocker_wait *wait)
+{
+	wait->done = true;
+	wake_up(&wait->wait);
+}
+
 static u32 rocker_msix_vector(struct rocker *rocker, unsigned vector)
 {
 	return rocker->msix_entries[vector].vector;
@@ -139,18 +170,18 @@ static int rocker_reg_test(struct rocker *rocker)
 	return 0;
 }
 
-static int rocker_dma_test_one(struct rocker *rocker, u32 test_type,
-			       dma_addr_t dma_handle, unsigned char *buf,
-			       unsigned char *expect, size_t size)
+static int rocker_dma_test_one(struct rocker *rocker, struct rocker_wait *wait,
+			       u32 test_type, dma_addr_t dma_handle,
+			       unsigned char *buf, unsigned char *expect,
+			       size_t size)
 {
 	struct pci_dev *pdev = rocker->pdev;
 	int i;
 
-	rocker->wait_done = false;
+	rocker_wait_reset(wait);
 	rocker_write32(rocker, TEST_DMA_CTRL, test_type);
 
-	wait_event_timeout(rocker->wait, rocker->wait_done, HZ / 10);
-	if (!rocker->wait_done) {
+	if (!rocker_wait_event_timeout(wait, HZ / 10)) {
 		dev_err(&pdev->dev, "no interrupt received within a timeout\n");
 		return -EIO;
 	}
@@ -168,7 +199,8 @@ static int rocker_dma_test_one(struct rocker *rocker, u32 test_type,
 #define ROCKER_TEST_DMA_BUF_SIZE (PAGE_SIZE * 4)
 #define ROCKER_TEST_DMA_FILL_PATTERN 0x96
 
-static int rocker_dma_test_offset(struct rocker *rocker, int offset)
+static int rocker_dma_test_offset(struct rocker *rocker,
+				  struct rocker_wait *wait, int offset)
 {
 	struct pci_dev *pdev = rocker->pdev;
 	unsigned char *alloc;
@@ -195,14 +227,14 @@ static int rocker_dma_test_offset(struct rocker *rocker, int offset)
 	rocker_write32(rocker, TEST_DMA_SIZE, ROCKER_TEST_DMA_BUF_SIZE);
 
 	memset(expect, ROCKER_TEST_DMA_FILL_PATTERN, ROCKER_TEST_DMA_BUF_SIZE);
-	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_FILL,
+	err = rocker_dma_test_one(rocker, wait, ROCKER_TEST_DMA_CTRL_FILL,
 				  dma_handle, buf, expect,
 				  ROCKER_TEST_DMA_BUF_SIZE);
 	if (err)
 		goto unmap;
 
 	memset(expect, 0, ROCKER_TEST_DMA_BUF_SIZE);
-	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_CLEAR,
+	err = rocker_dma_test_one(rocker, wait, ROCKER_TEST_DMA_CTRL_CLEAR,
 				  dma_handle, buf, expect,
 				  ROCKER_TEST_DMA_BUF_SIZE);
 	if (err)
@@ -211,7 +243,7 @@ static int rocker_dma_test_offset(struct rocker *rocker, int offset)
 	prandom_bytes(buf, ROCKER_TEST_DMA_BUF_SIZE);
 	for (i = 0; i < ROCKER_TEST_DMA_BUF_SIZE; i++)
 		expect[i] = ~buf[i];
-	err = rocker_dma_test_one(rocker, ROCKER_TEST_DMA_CTRL_INVERT,
+	err = rocker_dma_test_one(rocker, wait, ROCKER_TEST_DMA_CTRL_INVERT,
 				  dma_handle, buf, expect,
 				  ROCKER_TEST_DMA_BUF_SIZE);
 	if (err)
@@ -227,13 +259,13 @@ free_alloc:
 	return err;
 }
 
-static int rocker_dma_test(struct rocker *rocker)
+static int rocker_dma_test(struct rocker *rocker, struct rocker_wait *wait)
 {
 	int i;
 	int err;
 
 	for (i = 0; i < 8; i++) {
-		err = rocker_dma_test_offset(rocker, i);
+		err = rocker_dma_test_offset(rocker, wait, i);
 		if (err)
 			return err;
 	}
@@ -242,10 +274,9 @@ static int rocker_dma_test(struct rocker *rocker)
 
 static irqreturn_t rocker_test_irq_handler(int irq, void *dev_id)
 {
-	struct rocker *rocker = dev_id;
+	struct rocker_wait *wait = dev_id;
 
-	rocker->wait_done = true;
-	wake_up(&rocker->wait);
+	rocker_wait_wake_up(wait);
 
 	return IRQ_HANDLED;
 }
@@ -253,6 +284,7 @@ static irqreturn_t rocker_test_irq_handler(int irq, void *dev_id)
 static int rocker_basic_hw_test(struct rocker *rocker)
 {
 	struct pci_dev *pdev = rocker->pdev;
+	struct rocker_wait wait;
 	int err;
 
 	err = rocker_reg_test(rocker);
@@ -263,28 +295,27 @@ static int rocker_basic_hw_test(struct rocker *rocker)
 
 	err = request_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_TEST),
 			  rocker_test_irq_handler, 0,
-			  rocker_driver_name, rocker);
+			  rocker_driver_name, &wait);
 	if (err) {
 		dev_err(&pdev->dev, "cannot assign test irq\n");
 		return err;
 	}
 
-	rocker->wait_done = false;
+	rocker_wait_init(&wait);
 	rocker_write32(rocker, TEST_IRQ, ROCKER_MSIX_VEC_TEST);
 
-	wait_event_timeout(rocker->wait, rocker->wait_done, HZ / 10);
-	if (!rocker->wait_done) {
+	if (!rocker_wait_event_timeout(&wait, HZ / 10)) {
 		dev_err(&pdev->dev, "no interrupt received within a timeout\n");
 		err = -EIO;
 		goto free_irq;
 	}
 
-	err = rocker_dma_test(rocker);
+	err = rocker_dma_test(rocker, &wait);
 	if (err)
 		dev_err(&pdev->dev, "dma test failed\n");
 
 free_irq:
-	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_TEST), rocker);
+	free_irq(rocker_msix_vector(rocker, ROCKER_MSIX_VEC_TEST), &wait);
 	return err;
 }
 
