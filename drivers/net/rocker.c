@@ -1119,6 +1119,106 @@ static irqreturn_t rocker_rx_irq_handler(int irq, void *dev_id)
 }
 
 
+/********************
+ * Command interface
+ ********************/
+
+typedef int (*rocker_cmd_cb_t)(struct rocker *rocker,
+			       struct rocker_port *rocker_port,
+			       struct rocker_dma_desc_info *desc_info,
+			       void *priv);
+
+static int rocker_cmd_exec(struct rocker *rocker,
+			   struct rocker_port *rocker_port,
+			   rocker_cmd_cb_t prepare, void *prepare_priv,
+			   rocker_cmd_cb_t process, void *process_priv)
+{
+	struct rocker_dma_desc_info *desc_info;
+	struct rocker_wait wait;
+	int err;
+
+	desc_info = rocker_dma_desc_head_get(&rocker->cmd_ring);
+	if (!desc_info)
+		return -EAGAIN;
+
+	err = prepare(rocker, rocker_port, desc_info, prepare_priv);
+	if (err)
+		return err;
+
+	rocker_dma_desc_cookie_ptr_set(desc_info, &wait);
+	rocker_wait_init(&wait);
+	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
+
+	if (!rocker_wait_event_timeout(&wait, HZ / 10))
+		return -EIO;
+
+	err = rocker_dma_desc_err(desc_info);
+	if (err)
+		return err;
+
+	err = process(rocker, rocker_port, desc_info, process_priv);
+
+	rocker_dma_desc_gen_clear(desc_info);
+	return err;
+}
+
+static int
+rocker_cmd_get_port_settings_prepare(struct rocker *rocker,
+				     struct rocker_port *rocker_port,
+				     struct rocker_dma_desc_info *desc_info,
+				     void *priv)
+{
+	struct rocker_dma_tlv *cmd_info;
+
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_TYPE,
+			       ROCKER_TLV_CMD_TYPE_GET_PORT_SETTINGS))
+		return -EMSGSIZE;
+	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
+	if (!cmd_info)
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u32(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_LPORT,
+			       rocker_port->port_number + 1))
+		return -EMSGSIZE;
+	rocker_tlv_nest_end(desc_info, cmd_info);
+	return 0;
+}
+
+static int
+rocker_cmd_get_port_settings_process(struct rocker *rocker,
+				     struct rocker_port *rocker_port,
+				     struct rocker_dma_desc_info *desc_info,
+				     void *priv)
+{
+	struct ethtool_cmd *ecmd = priv;
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
+	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
+	u16 speed;
+	u8 duplex;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_CMD_INFO])
+		return -EIO;
+
+	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_CMD_PORT_SETTINGS_MAX,
+				attrs[ROCKER_TLV_CMD_INFO]);
+	if (!info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED] ||
+	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX])
+		return -EIO;
+
+	speed = rocker_tlv_get_u32(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED]);
+	duplex = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]);
+
+	ecmd->transceiver = XCVR_INTERNAL;
+	ecmd->supported = SUPPORTED_TP;
+	ecmd->phy_address = 0xff;
+	ecmd->port = PORT_TP;
+	ethtool_cmd_speed_set(ecmd, speed);
+	ecmd->duplex = duplex;
+
+	return 0;
+}
+
+
 /*****************
  * Net device ops
  *****************/
@@ -1323,68 +1423,10 @@ static int rocker_port_get_settings(struct net_device *dev,
 {
 	struct rocker_port *rocker_port = netdev_priv(dev);
 	struct rocker *rocker = rocker_port->rocker;
-	struct rocker_dma_desc_info *desc_info;
-	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
-	struct rocker_dma_tlv *cmd_info;
-	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
-	struct rocker_wait wait;
-	int err;
 
-	desc_info = rocker_dma_desc_head_get(&rocker->cmd_ring);
-	if (!desc_info)
-		return -EAGAIN;
-
-	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_TYPE,
-			       ROCKER_TLV_CMD_TYPE_GET_PORT_SETTINGS))
-		goto tlv_put_failure;
-	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
-	if (!cmd_info)
-		goto tlv_put_failure;
-	if (rocker_tlv_put_u32(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_LPORT,
-			       rocker_port->port_number + 1))
-		goto tlv_put_failure;
-	rocker_tlv_nest_end(desc_info, cmd_info);
-
-	rocker_dma_desc_cookie_ptr_set(desc_info, &wait);
-	rocker_wait_init(&wait);
-	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
-
-	if (!rocker_wait_event_timeout(&wait, HZ / 10))
-		return -EIO;
-
-	err = rocker_dma_desc_err(desc_info);
-	if (err)
-		goto gen_clear;
-
-	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
-	if (!attrs[ROCKER_TLV_CMD_INFO]) {
-		err = -EIO;
-		goto gen_clear;
-	}
-
-	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_CMD_PORT_SETTINGS_MAX,
-				attrs[ROCKER_TLV_CMD_INFO]);
-	if (!info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED] ||
-	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]) {
-		err = -EIO;
-		goto gen_clear;
-	}
-
-	ecmd->transceiver = XCVR_INTERNAL;
-	ecmd->supported = SUPPORTED_TP;
-	ecmd->phy_address = 0xff;
-	ecmd->port = PORT_TP;
-	ethtool_cmd_speed_set(ecmd, rocker_tlv_get_u32(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED]));
-	ecmd->duplex = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]);
-	err = 0;
-
-gen_clear:
-	rocker_dma_desc_gen_clear(desc_info);
-	return err;
-
-tlv_put_failure:
-	err = -EMSGSIZE;
-	return err;
+	return rocker_cmd_exec(rocker, rocker_port,
+			       rocker_cmd_get_port_settings_prepare, NULL,
+			       rocker_cmd_get_port_settings_process, ecmd);
 }
 
 static void rocker_port_get_drvinfo(struct net_device *dev,
