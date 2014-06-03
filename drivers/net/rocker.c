@@ -39,7 +39,6 @@ struct rocker_dma_desc_info {
 	size_t tlv_size;
 	struct rocker_dma_desc *desc;
 	DEFINE_DMA_UNMAP_ADDR(mapaddr);
-	struct sk_buff *skb;
 };
 
 struct rocker_dma_ring_info {
@@ -813,7 +812,7 @@ static int rocker_dma_rx_ring_skb_alloc(struct rocker *rocker,
 	/* Ensure that hw will see tlv_size zero in case of an error.
 	 * That tells hw to use another descriptor.
 	 */
-	desc_info->skb = NULL;
+	rocker_dma_desc_cookie_ptr_set(desc_info, NULL);
 	desc_info->tlv_size = 0;
 
 	skb = netdev_alloc_skb_ip_align(dev, buf_len);
@@ -825,7 +824,7 @@ static int rocker_dma_rx_ring_skb_alloc(struct rocker *rocker,
 		dev_kfree_skb_any(skb);
 		return err;
 	}
-	desc_info->skb = skb;
+	rocker_dma_desc_cookie_ptr_set(desc_info, skb);
 	return 0;
 }
 
@@ -848,12 +847,13 @@ static void rocker_dma_rx_ring_skb_free(struct rocker *rocker,
 					struct rocker_dma_desc_info *desc_info)
 {
 	struct rocker_dma_tlv *attrs[ROCKER_TLV_RX_MAX + 1];
+	struct sk_buff *skb = rocker_dma_desc_cookie_ptr_get(desc_info);
 
-	if (!desc_info->skb)
+	if (!skb)
 		return;
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_RX_MAX, desc_info);
 	rocker_dma_rx_ring_skb_unmap(rocker, attrs);
-	dev_kfree_skb_any(desc_info->skb);
+	dev_kfree_skb_any(skb);
 }
 
 static int rocker_dma_rx_ring_skbs_alloc(struct rocker *rocker,
@@ -1224,7 +1224,7 @@ static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_BUSY;
 	}
 
-	desc_info->skb = skb;
+	rocker_dma_desc_cookie_ptr_set(desc_info, skb);
 
 	frags = rocker_tlv_nest_start(desc_info, ROCKER_TLV_TX_FRAGS);
 	if (!frags)
@@ -1391,7 +1391,7 @@ static int rocker_port_poll_tx(struct napi_struct *napi, int budget)
 			netdev_err(rocker_port->dev, "tx desc received with err %d\n",
 				   err);
 		rocker_tx_desc_frags_unmap(rocker_port, desc_info);
-		dev_kfree_skb_any(desc_info->skb);
+		dev_kfree_skb_any(rocker_dma_desc_cookie_ptr_get(desc_info));
 		credits++;
 	}
 
@@ -1409,7 +1409,7 @@ static int rocker_port_rx_process(struct rocker *rocker,
 				  struct rocker_dma_desc_info *desc_info)
 {
 	struct rocker_dma_tlv *attrs[ROCKER_TLV_RX_MAX + 1];
-	struct sk_buff *skb = desc_info->skb;
+	struct sk_buff *skb = rocker_dma_desc_cookie_ptr_get(desc_info);
 	size_t rx_len;
 
 	if (!skb)
