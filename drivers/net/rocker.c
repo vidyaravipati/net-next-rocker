@@ -1225,7 +1225,7 @@ rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
 	ecmd->phy_address = 0xff;
 	ecmd->port = PORT_TP;
 	ethtool_cmd_speed_set(ecmd, speed);
-	ecmd->duplex = duplex;
+	ecmd->duplex = duplex ? DUPLEX_FULL : DUPLEX_HALF;
 
 	return 0;
 }
