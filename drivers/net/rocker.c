@@ -18,6 +18,7 @@
 #include <linux/random.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
+#include <linux/socket.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/if_ether.h>
@@ -1166,7 +1167,8 @@ static int rocker_cmd_exec(struct rocker *rocker,
 	if (err)
 		return err;
 
-	err = process(rocker, rocker_port, desc_info, process_priv);
+	if (process)
+		err = process(rocker, rocker_port, desc_info, process_priv);
 
 	rocker_dma_desc_gen_clear(desc_info);
 	return err;
@@ -1253,6 +1255,31 @@ rocker_cmd_get_port_settings_macaddr_process(struct rocker *rocker,
 		return -EINVAL;
 
 	memcpy(macaddr, rocker_tlv_data(attr), ETH_ALEN);
+	return 0;
+}
+
+static int
+rocker_cmd_set_port_settings_macaddr_prepare(struct rocker *rocker,
+					     struct rocker_port *rocker_port,
+					     struct rocker_dma_desc_info *desc_info,
+					     void *priv)
+{
+	unsigned char *macaddr = priv;
+	struct rocker_dma_tlv *cmd_info;
+
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_TYPE,
+			       ROCKER_TLV_CMD_TYPE_SET_PORT_SETTINGS))
+		return -EMSGSIZE;
+	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
+	if (!cmd_info)
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u32(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_LPORT,
+			       rocker_port->port_number + 1))
+		return -EMSGSIZE;
+	if (rocker_tlv_put(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_MACADDR,
+			   ETH_ALEN, macaddr))
+		return -EMSGSIZE;
+	rocker_tlv_nest_end(desc_info, cmd_info);
 	return 0;
 }
 
@@ -1433,6 +1460,25 @@ out:
 	return NETDEV_TX_OK;
 }
 
+static int rocker_port_set_mac_address(struct net_device *dev, void *p)
+{
+	struct sockaddr *addr = p;
+	struct rocker_port *rocker_port = netdev_priv(dev);
+	struct rocker *rocker = rocker_port->rocker;
+	int err;
+
+	if (!is_valid_ether_addr(addr->sa_data))
+		return -EADDRNOTAVAIL;
+
+	err = rocker_cmd_exec(rocker, rocker_port,
+			      rocker_cmd_set_port_settings_macaddr_prepare,
+			      addr->sa_data, NULL, NULL);
+	if (err)
+		return err;
+	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	return 0;
+}
+
 static int rocker_port_swdev_get_id(struct net_device *dev,
 				    struct netdev_phys_item_id *psid)
 {
@@ -1448,6 +1494,7 @@ static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_open		= rocker_port_open,
 	.ndo_stop		= rocker_port_stop,
 	.ndo_start_xmit		= rocker_port_xmit,
+	.ndo_set_mac_address	= rocker_port_set_mac_address,
 	.ndo_swdev_get_id	= rocker_port_swdev_get_id,
 };
 
