@@ -1204,7 +1204,7 @@ rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
 	struct ethtool_cmd *ecmd = priv;
 	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
 	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
-	u16 speed;
+	u32 speed;
 	u8 duplex;
 
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
