@@ -1206,6 +1206,7 @@ rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
 	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
 	u32 speed;
 	u8 duplex;
+	u8 autoneg;
 
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
 	if (!attrs[ROCKER_TLV_CMD_INFO])
@@ -1214,11 +1215,13 @@ rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
 	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_CMD_PORT_SETTINGS_MAX,
 				attrs[ROCKER_TLV_CMD_INFO]);
 	if (!info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED] ||
-	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX])
+	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX] ||
+	    !info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_AUTONEG])
 		return -EIO;
 
 	speed = rocker_tlv_get_u32(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_SPEED]);
 	duplex = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX]);
+	autoneg = rocker_tlv_get_u8(info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_AUTONEG]);
 
 	ecmd->transceiver = XCVR_INTERNAL;
 	ecmd->supported = SUPPORTED_TP;
@@ -1226,6 +1229,7 @@ rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
 	ecmd->port = PORT_TP;
 	ethtool_cmd_speed_set(ecmd, speed);
 	ecmd->duplex = duplex ? DUPLEX_FULL : DUPLEX_HALF;
+	ecmd->autoneg = autoneg ? AUTONEG_ENABLE : AUTONEG_DISABLE;
 
 	return 0;
 }
