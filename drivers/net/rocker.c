@@ -14,6 +14,7 @@
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
+#include <linux/spinlock.h>
 #include <linux/random.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
@@ -72,6 +73,7 @@ struct rocker {
 	struct {
 		u64 id;
 	} hw;
+	spinlock_t cmd_ring_lock;
 	struct rocker_dma_ring_info cmd_ring;
 	struct rocker_dma_ring_info event_ring;
 };
@@ -755,6 +757,8 @@ static int rocker_dma_rings_init(struct rocker *rocker)
 		return err;
 	}
 
+	spin_lock_init(&rocker->cmd_ring_lock);
+
 	err = rocker_dma_ring_bufs_alloc(rocker, &rocker->cmd_ring,
 					 PCI_DMA_BIDIRECTIONAL, PAGE_SIZE);
 	if (err) {
@@ -1010,11 +1014,13 @@ static irqreturn_t rocker_cmd_irq_handler(int irq, void *dev_id)
 	struct rocker_wait *wait;
 	u32 credits = 0;
 
+	spin_lock(&rocker->cmd_ring_lock);
 	while ((desc_info = rocker_dma_desc_tail_get(&rocker->cmd_ring))) {
 		wait = rocker_dma_desc_cookie_ptr_get(desc_info);
 		rocker_wait_wake_up(wait);
 		credits++;
 	}
+	spin_unlock(&rocker->cmd_ring_lock);
 	rocker_dma_ring_credits_set(rocker, &rocker->cmd_ring, credits);
 
 	return IRQ_HANDLED;
@@ -1134,19 +1140,24 @@ static int rocker_cmd_exec(struct rocker *rocker,
 {
 	struct rocker_dma_desc_info *desc_info;
 	struct rocker_wait wait;
+	unsigned long flags;
 	int err;
 
+	spin_lock_irqsave(&rocker->cmd_ring_lock, flags);
 	desc_info = rocker_dma_desc_head_get(&rocker->cmd_ring);
-	if (!desc_info)
+	if (!desc_info) {
+		spin_unlock_irqrestore(&rocker->cmd_ring_lock, flags);
 		return -EAGAIN;
-
+	}
 	err = prepare(rocker, rocker_port, desc_info, prepare_priv);
-	if (err)
+	if (err) {
+		spin_unlock_irqrestore(&rocker->cmd_ring_lock, flags);
 		return err;
-
+	}
 	rocker_dma_desc_cookie_ptr_set(desc_info, &wait);
 	rocker_wait_init(&wait);
 	rocker_dma_desc_head_set(rocker, &rocker->cmd_ring, desc_info);
+	spin_unlock_irqrestore(&rocker->cmd_ring_lock, flags);
 
 	if (!rocker_wait_event_timeout(&wait, HZ / 10))
 		return -EIO;
