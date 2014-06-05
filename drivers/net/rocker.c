@@ -561,13 +561,12 @@ rocker_dma_desc_head_get(struct rocker_dma_ring_info *info)
 	static struct rocker_dma_desc_info *desc_info;
 	u32 head = __pos_inc(info->head, info->size);
 
-	if (head == info->tail)
-		return NULL; /* ring full */
 	desc_info = &info->desc_info[info->head];
+	if (head == info->tail || rocker_dma_desc_gen(desc_info))
+		return NULL; /* ring full */
 	desc_info->tlv_size = 0;
 	return desc_info;
 }
-
 
 static void rocker_dma_desc_commit(struct rocker_dma_desc_info *desc_info)
 {
