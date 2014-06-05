@@ -1263,6 +1263,37 @@ rocker_cmd_get_port_settings_macaddr_process(struct rocker *rocker,
 }
 
 static int
+rocker_cmd_set_port_settings_ethtool_prepare(struct rocker *rocker,
+					     struct rocker_port *rocker_port,
+					     struct rocker_dma_desc_info *desc_info,
+					     void *priv)
+{
+	struct ethtool_cmd *ecmd = priv;
+	struct rocker_dma_tlv *cmd_info;
+
+	if (rocker_tlv_put_u16(desc_info, ROCKER_TLV_CMD_TYPE,
+			       ROCKER_TLV_CMD_TYPE_SET_PORT_SETTINGS))
+		return -EMSGSIZE;
+	cmd_info = rocker_tlv_nest_start(desc_info, ROCKER_TLV_CMD_INFO);
+	if (!cmd_info)
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u32(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_LPORT,
+			       rocker_port->port_number + 1))
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u32(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_SPEED,
+			       ethtool_cmd_speed(ecmd)))
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u8(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_DUPLEX,
+			      ecmd->duplex))
+		return -EMSGSIZE;
+	if (rocker_tlv_put_u8(desc_info, ROCKER_TLV_CMD_PORT_SETTINGS_AUTONEG,
+			      ecmd->autoneg))
+		return -EMSGSIZE;
+	rocker_tlv_nest_end(desc_info, cmd_info);
+	return 0;
+}
+
+static int
 rocker_cmd_set_port_settings_macaddr_prepare(struct rocker *rocker,
 					     struct rocker_port *rocker_port,
 					     struct rocker_dma_desc_info *desc_info,
@@ -1519,6 +1550,17 @@ static int rocker_port_get_settings(struct net_device *dev,
 			       ecmd);
 }
 
+static int rocker_port_set_settings(struct net_device *dev,
+				    struct ethtool_cmd *ecmd)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+	struct rocker *rocker = rocker_port->rocker;
+
+	return rocker_cmd_exec(rocker, rocker_port,
+			       rocker_cmd_set_port_settings_ethtool_prepare,
+			       ecmd, NULL, NULL);
+}
+
 static void rocker_port_get_drvinfo(struct net_device *dev,
 				    struct ethtool_drvinfo *drvinfo)
 {
@@ -1528,6 +1570,7 @@ static void rocker_port_get_drvinfo(struct net_device *dev,
 
 static const struct ethtool_ops rocker_port_ethtool_ops = {
 	.get_settings		= rocker_port_get_settings,
+	.set_settings		= rocker_port_set_settings,
 	.get_drvinfo		= rocker_port_get_drvinfo,
 	.get_link		= ethtool_op_get_link,
 };
