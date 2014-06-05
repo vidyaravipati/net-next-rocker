@@ -1194,10 +1194,10 @@ rocker_cmd_get_port_settings_prepare(struct rocker *rocker,
 }
 
 static int
-rocker_cmd_get_port_settings_process(struct rocker *rocker,
-				     struct rocker_port *rocker_port,
-				     struct rocker_dma_desc_info *desc_info,
-				     void *priv)
+rocker_cmd_get_port_settings_ethtool_process(struct rocker *rocker,
+					     struct rocker_port *rocker_port,
+					     struct rocker_dma_desc_info *desc_info,
+					     void *priv)
 {
 	struct ethtool_cmd *ecmd = priv;
 	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
@@ -1225,6 +1225,34 @@ rocker_cmd_get_port_settings_process(struct rocker *rocker,
 	ethtool_cmd_speed_set(ecmd, speed);
 	ecmd->duplex = duplex;
 
+	return 0;
+}
+
+static int
+rocker_cmd_get_port_settings_macaddr_process(struct rocker *rocker,
+					     struct rocker_port *rocker_port,
+					     struct rocker_dma_desc_info *desc_info,
+					     void *priv)
+{
+	unsigned char *macaddr = priv;
+	struct rocker_dma_tlv *attrs[ROCKER_TLV_CMD_MAX + 1];
+	struct rocker_dma_tlv *info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MAX + 1];
+	struct rocker_dma_tlv *attr;
+
+	rocker_tlv_parse_desc(attrs, ROCKER_TLV_CMD_MAX, desc_info);
+	if (!attrs[ROCKER_TLV_CMD_INFO])
+		return -EIO;
+
+	rocker_tlv_parse_nested(info_attrs, ROCKER_TLV_CMD_PORT_SETTINGS_MAX,
+				attrs[ROCKER_TLV_CMD_INFO]);
+	attr = info_attrs[ROCKER_TLV_CMD_PORT_SETTINGS_MACADDR];
+	if (!attr)
+		return -EIO;
+
+	if (rocker_tlv_len(attr) != ETH_ALEN)
+		return -EINVAL;
+
+	memcpy(macaddr, rocker_tlv_data(attr), ETH_ALEN);
 	return 0;
 }
 
@@ -1436,7 +1464,8 @@ static int rocker_port_get_settings(struct net_device *dev,
 
 	return rocker_cmd_exec(rocker, rocker_port,
 			       rocker_cmd_get_port_settings_prepare, NULL,
-			       rocker_cmd_get_port_settings_process, ecmd);
+			       rocker_cmd_get_port_settings_ethtool_process,
+			       ecmd);
 }
 
 static void rocker_port_get_drvinfo(struct net_device *dev,
@@ -1574,6 +1603,22 @@ static void rocker_remove_ports(struct rocker *rocker)
 	kfree(rocker->ports);
 }
 
+static void rocker_port_dev_addr_init(struct rocker *rocker,
+				      struct rocker_port *rocker_port)
+{
+	struct pci_dev *pdev = rocker->pdev;
+	int err;
+
+	err = rocker_cmd_exec(rocker, rocker_port,
+			      rocker_cmd_get_port_settings_prepare, NULL,
+			      rocker_cmd_get_port_settings_macaddr_process,
+			      rocker_port->dev->dev_addr);
+	if (err) {
+		dev_warn(&pdev->dev, "failed to get mac address, using random\n");
+		eth_hw_addr_random(rocker_port->dev);
+	}
+}
+
 static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 {
 	struct pci_dev *pdev = rocker->pdev;
@@ -1589,7 +1634,7 @@ static int rocker_probe_port(struct rocker *rocker, unsigned port_number)
 	rocker_port->rocker = rocker;
 	rocker_port->port_number = port_number;
 
-	eth_hw_addr_random(dev);
+	rocker_port_dev_addr_init(rocker, rocker_port);
 	dev->netdev_ops = &rocker_port_netdev_ops;
 	dev->ethtool_ops = &rocker_port_ethtool_ops;
 	netif_napi_add(dev, &rocker_port->napi_tx, rocker_port_poll_tx,
